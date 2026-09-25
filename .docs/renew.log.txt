@@ -8,16 +8,21 @@ INFO  [2025-12-17 00:52:42 +0700] RUN: /root/.acme.sh/acme.sh --set-default-ca -
 INFO  [2025-12-17 00:52:43 +0700] stdout - acme.sh --list
 INFO  [2025-12-17 00:52:43 +0700] RUN: /root/.acme.sh/acme.sh --list
 Main_Domain            KeyLength  SAN_Domains                CA                    Created               Renew
-anhngu.eagles.edu.vn   "ec-256"   www.anhngu.eagles.edu.vn   LetsEncrypt.org       2025-09-07T08:52:06Z  2025-11-05T08:52:06Z
-anhngu.eaglesvn.com    "ec-256"   www.anhngu.eaglesvn.com    LetsEncrypt.org       2025-09-07T21:01:47Z  2025-11-05T21:01:47Z
+admin.eagles.edu.vn    "ec-256"   www.admin.eagles.edu.vn    LetsEncrypt.org       2026-05-26T14:17:45Z  2026-07-24T14:17:45Z
+anhngu.eagles.edu.vn   "ec-256"   www.anhngu.eagles.edu.vn   LetsEncrypt.org       2026-05-26T14:23:56Z  2026-07-24T14:23:56Z
+anhngu.eaglesvn.com    "ec-256"   www.anhngu.eaglesvn.com    LetsEncrypt.org       2026-05-26T15:04:00Z  2026-07-24T15:04:00Z
 eagles.edu.vn          "ec-256"   no                         LetsEncrypt.org_test
-eaglesvn.com           "ec-256"   www.eaglesvn.com           LetsEncrypt.org       2025-09-07T18:53:15Z  2025-11-05T18:53:15Z
-eagles.vn              "ec-256"   www.eagles.vn              LetsEncrypt.org       2025-12-16T09:13:19Z  2026-02-13T09:13:19Z
-eaglesvn.online        "ec-256"   www.eaglesvn.online        LetsEncrypt.org       2025-12-16T09:58:55Z  2026-02-13T09:58:55Z
-gptpatient.com         "ec-256"   www.gptpatient.com         LetsEncrypt.org       2025-06-06T17:34:07Z  2025-08-04T17:34:07Z
-obgyn.gptpatient.com   "ec-256"   www.obgyn.gptpatient.com   LetsEncrypt.org       2025-06-07T06:27:18Z  2025-08-05T06:27:18Z
-thuvien.eagles.edu.vn  "ec-256"   www.thuvien.eagles.edu.vn  LetsEncrypt.org       2025-09-07T16:04:28Z  2025-11-05T16:04:28Z
-thuvien.eaglesvn.com   "ec-256"   www.thuvien.eaglesvn.com   LetsEncrypt.org       2025-09-07T21:25:50Z  2025-11-05T21:25:50Z
+eaglesvn.com           "ec-256"   www.eaglesvn.com           LetsEncrypt.org       2026-05-26T15:00:00Z  2026-07-24T15:00:00Z
+eagles.vn              "ec-256"   www.eagles.vn              LetsEncrypt.org       2026-05-26T15:24:37Z  2026-07-24T15:24:37Z
+eaglesvn.online        "ec-256"   www.eaglesvn.online        LetsEncrypt.org       2026-05-26T15:20:14Z  2026-07-24T15:20:14Z
+gptpatient.com         "ec-256"   www.gptpatient.com         LetsEncrypt.org       2026-05-26T15:28:06Z  2026-07-24T15:28:06Z
+ielts.eagles.edu.vn    "ec-256"   www.ielts.eagles.edu.vn    LetsEncrypt.org       2026-05-26T14:43:15Z  2026-07-24T14:43:15Z
+moodle.eagles.edu.vn   "ec-256"   www.moodle.eagles.edu.vn   LetsEncrypt.org       2026-04-16T19:20:24Z  2026-06-14T19:20:24Z
+obgyn.gptpatient.com   "ec-256"   www.obgyn.gptpatient.com   LetsEncrypt.org       2026-05-26T15:31:19Z  2026-07-24T15:31:19Z
+test.eagles.edu.vn     "ec-256"   www.test.eagles.edu.vn     LetsEncrypt.org       2026-04-05T16:37:14Z  2026-06-03T16:37:14Z
+thuvien.eagles.edu.vn  "ec-256"   www.thuvien.eagles.edu.vn  LetsEncrypt.org       2026-05-26T14:50:01Z  2026-07-24T14:50:01Z
+thuvien.eaglesvn.com   "ec-256"   www.thuvien.eaglesvn.com   LetsEncrypt.org       2026-05-26T15:10:07Z  2026-07-24T15:10:07Z
+
 INFO  [2025-12-17 00:52:43 +0700] stdout - acme.sh --info (best-effort; may be empty if not issued yet)
 INFO  [2025-12-17 00:52:43 +0700] RUN: /root/.acme.sh/acme.sh --info -d eagles.edu.vn --ecc
 DOMAIN_CONF=/root/.acme.sh/eagles.edu.vn_ecc/eagles.edu.vn.conf

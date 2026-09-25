@@ -1,7 +1,9 @@
 const { test, expect } = require("@playwright/test")
 
-const BASE_URL = process.env.TARGET_URL || process.env.BASE_URL || "https://example.com"
-const enforceSecurityHeaders = BASE_URL !== "https://example.com"
+const DEFAULT_BASE_URL = "https://example.com"
+const BASE_URL = process.env.TARGET_URL || process.env.BASE_URL || DEFAULT_BASE_URL
+const strictSecurityHeaders = process.env.PLAYWRIGHT_REQUIRE_SECURITY_HEADERS === "1"
+const enforceSecurityHeaders = strictSecurityHeaders || BASE_URL !== DEFAULT_BASE_URL
 
 const normalizeHeaders = (headers = {}) =>
   Object.fromEntries(
@@ -24,9 +26,15 @@ test.describe("SSL posture", () => {
   })
 
   test("security headers are present", async ({ request, baseURL }) => {
+    if (strictSecurityHeaders && (!baseURL || baseURL === DEFAULT_BASE_URL)) {
+      throw new Error(
+        "PLAYWRIGHT_REQUIRE_SECURITY_HEADERS=1 requires TARGET_URL or BASE_URL to be set to a non-default host."
+      )
+    }
+
     test.skip(
       !baseURL || !enforceSecurityHeaders,
-      "Set TARGET_URL to your host to enforce security headers."
+      "Set TARGET_URL/BASE_URL or PLAYWRIGHT_REQUIRE_SECURITY_HEADERS=1 to enforce security headers."
     )
 
     const response = await request.get(baseURL, { failOnStatusCode: false })

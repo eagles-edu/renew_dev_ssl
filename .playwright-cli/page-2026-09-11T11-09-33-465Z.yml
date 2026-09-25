@@ -1,0 +1,22 @@
+- generic [ref=f3e2]:
+  - heading "1. Morning" [level=1] [ref=f3e3]
+  - generic [ref=f3e4]:
+    - checkbox "loop audio playback" [ref=f3e6]
+    - text: Repeat
+  - paragraph [ref=f3e7]: He wakes up. He sees the sun rise. He brushes his teeth. His teeth are white. He puts on his clothes. His shirt is blue. His shoes are yellow. His pants are brown. He goes downstairs. He gets a bowl. He pours milk and cereal. He eats. He gets the newspaper. He reads.
+  - generic [ref=f3e8]:
+    - separator [ref=f3e9]
+    - link "Vocabulary" [ref=f3e10] [cursor=pointer]:
+      - /url: ../w1/w1001.html
+    - link "Cloze" [ref=f3e11] [cursor=pointer]:
+      - /url: ../cloze/b1cloze001.html
+    - link "Sentences" [ref=f3e12] [cursor=pointer]:
+      - /url: ../sent/b1mx00101.html
+    - link "Dictation" [ref=f3e13] [cursor=pointer]:
+      - /url: ../dict/b1d001.html
+    - separator [ref=f3e14]
+    - link "MENU" [ref=f3e15] [cursor=pointer]:
+      - /url: ../index.html
+    - link [ref=f3e16] [cursor=pointer]:
+      - /url: b1002.html
+      - img "Next" [ref=f3e17]

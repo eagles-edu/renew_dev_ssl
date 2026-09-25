@@ -12,7 +12,7 @@
   "htmlWhitespaceSensitivity": "ignore",
   "overrides": [
     {
-      "files": ["*.html", "*.htm", "*.sh"],
+      "files": ["*.html", "*.htm"],
       "options": {
         "parser": "html",
         "bracketSameLine": true,

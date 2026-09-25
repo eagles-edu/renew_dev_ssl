@@ -5,9 +5,9 @@ permissions:
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   ci:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node 20
+      - name: Use Node 22
         uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -27,5 +27,15 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Check
+        run: npm run check
+
+      - name: Strict security headers check (optional)
+        if: ${{ vars.TARGET_URL != '' }}
+        env:
+          TARGET_URL: ${{ vars.TARGET_URL }}
+          PLAYWRIGHT_REQUIRE_SECURITY_HEADERS: "1"
+        run: npm run test:strict

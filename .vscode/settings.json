@@ -36,6 +36,10 @@
     "ossl",
     "Precertificate",
     "PWDEBUG",
-    "SERVFAIL"
+    "sed",
+    "SERVFAIL",
+    "soa",
+    "SOA",
+    "UDP"
   ]
 }

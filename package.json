@@ -9,14 +9,17 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
+    "check:moodle-db": "./scripts/moodle-db-healthcheck.sh",
     "test": "playwright test",
+    "test:strict": "PLAYWRIGHT_REQUIRE_SECURITY_HEADERS=1 playwright test",
     "test:debug": "PWDEBUG=1 playwright test --ui",
     "test:report": "playwright show-report",
     "pw:install": "playwright install chromium firefox webkit",
-    "check": "npm run lint && npm run format:check && npm run test"
+    "check": "npm run lint && npm run format:check && npm run test",
+    "check:strict": "npm run lint && npm run format:check && npm run test:strict"
   },
   "engines": {
-    "node": "20.19.4"
+    "node": ">=22.22.0 <23"
   },
   "repository": {
     "type": "git",
@@ -31,11 +34,11 @@
   },
   "homepage": "https://github.com/eagles-edu/renew_ssl#readme",
   "devDependencies": {
-    "@eslint/js": "^9.33.0",
-    "@playwright/test": "^1.57.0",
-    "dotenv": "^17.2.3",
-    "eslint": "^9.33.0",
-    "globals": "^16.5.0",
-    "prettier": "^3.7.4"
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.58.2",
+    "dotenv": "^17.2.4",
+    "eslint": "^10.0.0",
+    "globals": "^17.3.0",
+    "prettier": "^3.8.1"
   }
 }

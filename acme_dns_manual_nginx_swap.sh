@@ -1,42 +1,58 @@
 #!/usr/bin/env bash
-# /usr/local/sbin/acme_dns_manual_nginx_swap.sh
-# Purpose: Safely swap Nginx config, re-issue/renew ECC cert via acme.sh manual DNS, verify public+authoritative TXT, restore prod config, install cert.
-# Notes:
-# - Designed to be run as root (sudo -i).
-# - Uses a lock + trap-based rollback to avoid leaving nginx in a broken state.
-# - Emits informative error/warning messages with concrete next steps (no vague "internal error").
+# Safely issue or renew an ECC certificate with manual DNS validation and an
+# Nginx staging/cutover workflow.
+#
+# Modes:
+#   renew: swap the enabled production entry to staged SSL, then restore it.
+#   new: keep an existing staged SSL link enabled, then enable production.
+#
+# Run as root. Confirm the domain exists in DOMAIN_CERTIFICATE_INVENTORY.md,
+# keep DNS provider access ready, enter the exact TXT values printed by acme.sh,
+# and continue only after public and authoritative DNS checks pass.
+#
+# Examples:
+#   sudo ./acme_dns_manual_nginx_swap.sh --domain example.com --mode renew
+#   sudo ./acme_dns_manual_nginx_swap.sh --domain newsite.example.com --mode new
 
 set -euo pipefail
+umask 077
 
 # ---------- Config (edit only if your paths differ) ----------
 ACME="/root/.acme.sh/acme.sh"
 NGINX_ENABLED="/etc/nginx/sites-enabled"
+NGINX_AVAILABLE="/etc/nginx/sites-available"
 SSL_REPO="/etc/nginx/sites-available/ssl_conf_repo"
 TEMP_DIR="/etc/nginx/temp_production_symlink"
 LOCK_FILE="/run/lock/acme-dns-manual-nginx-swap.lock"
 LOG_DIR="/var/log"
 
 # Public resolvers for propagation checks
-PUBLIC_RESOLVERS=( ""8.8.8.8" 1.1.1.1" "9.9.9.9" )
+PUBLIC_RESOLVERS=( "1.1.1.1" "8.8.8.8" "9.9.9.9" )
+# Set CHECK_AUTH_IPV6=yes only when authoritative IPv6 DNS transport is ready.
+CHECK_AUTH_IPV6="${CHECK_AUTH_IPV6:-no}"
 
 # ---------- State (used for rollback) ----------
 DOMAIN=""
 WWW=""
+RUN_MODE="renew"
 LOG_FILE=""
 PROD_ENABLED_PATH=""
+PROD_AVAILABLE_PATH=""
 PROD_MOVED_PATH=""
 STAGE_LINK_PATH=""
 STAGE_CONF_PATH=""
 ROLLBACK_NEEDED="no"
+NEW_MODE_LINK_SWITCHED="no"
 ECC_DIR=""
 ECC_BACKUP=""
-ECC_REMOVED="no"
+ECC_STATE_CHANGED="no"
+CERT_ISSUED="no"
 
 # ---------- Messaging helpers ----------
 ts() { date +"%F %T %z"; }
 info() { echo "INFO  [$(ts)] $*"; }
-warn() { echo "WARN  [$(ts)] $*"; }
-err()  { echo "ERROR [$(ts)] $*"; }
+warn() { echo "WARN  [$(ts)] $*" >&2; }
+err()  { echo "ERROR [$(ts)] $*" >&2; }
 die()  { err "$*"; exit 1; }
 
 # Print command then run it (stdout preserved via global logging tee)
@@ -45,19 +61,54 @@ run() {
   "$@"
 }
 
+validate_reload_nginx() {
+  run systemctl status nginx --no-pager || true
+  run nginx -t
+  run systemctl reload nginx
+  run systemctl status nginx --no-pager || true
+}
+
 pause_enter() {
+  local prompt="$1" answer
   echo
-  read -r -p "ACTION: $*  (press Enter to continue) " _ || true
+  while true; do
+    read -r -p "ACTION: ${prompt}  (Enter=continue, r=restore and quit) " answer || rollback "input closed at restore checkpoint"
+    case "${answer,,}" in
+      "") return 0 ;;
+      r|restore|q|quit) rollback "operator requested full configuration restore" ;;
+      *) warn "Press Enter to continue, or 'r' to restore the full configuration and quit." ;;
+    esac
+  done
 }
 
 ask_yes_no() {
   local prompt="$1" ans
   while true; do
-    read -r -p "PROMPT: ${prompt} [y/n]: " ans || true
+    read -r -p "PROMPT: ${prompt} [y/n/r=restore+quit]: " ans || rollback "input closed at restore checkpoint"
     case "${ans,,}" in
       y|yes) return 0 ;;
       n|no)  return 1 ;;
-      *) warn "Please answer 'y' or 'n'." ;;
+      r|restore|q|quit) rollback "operator requested full configuration restore" ;;
+      *) warn "Please answer 'y', 'n', or 'r' to restore and quit." ;;
+    esac
+  done
+}
+
+read_txt_value_or_restore() {
+  local prompt="$1" variable_name="$2" value
+  while true; do
+    read -r -p "INPUT: ${prompt} (or 'r' to restore and quit): " value || rollback "input closed at restore checkpoint"
+    case "${value,,}" in
+      r|restore|q|quit)
+        rollback "operator requested full configuration restore"
+        ;;
+      "")
+        warn "A TXT value is required, or enter 'r' to restore and quit."
+        ;;
+      *)
+        printf -v "$variable_name" '%s' "${value//\"/}"
+        return 0
+        ;;
     esac
   done
 }
@@ -77,23 +128,45 @@ rollback() {
   warn "Rollback initiated: ${why}"
   set +e
 
-  # Restore Nginx prod entry if we swapped it
+  # Restore Nginx state based on selected flow
   if [ "$ROLLBACK_NEEDED" = "yes" ]; then
-    if [ -n "$STAGE_LINK_PATH" ] && [ -L "$STAGE_LINK_PATH" ]; then
-      info "Removing staged symlink: $STAGE_LINK_PATH"
-      rm -f "$STAGE_LINK_PATH"
+    if [ "$RUN_MODE" = "renew" ]; then
+      if [ -n "$STAGE_LINK_PATH" ] && [ -L "$STAGE_LINK_PATH" ]; then
+        info "Removing staged symlink: $STAGE_LINK_PATH"
+        rm -f "$STAGE_LINK_PATH"
+      fi
+
+      if [ -n "$PROD_MOVED_PATH" ] && [ -e "$PROD_MOVED_PATH" ]; then
+        info "Restoring production entry to: $PROD_ENABLED_PATH"
+        mv -f "$PROD_MOVED_PATH" "$PROD_ENABLED_PATH"
+      fi
+    elif [ "$RUN_MODE" = "new" ]; then
+      if [ "$NEW_MODE_LINK_SWITCHED" = "yes" ]; then
+        if [ -n "$PROD_ENABLED_PATH" ] && [ -L "$PROD_ENABLED_PATH" ]; then
+          info "Removing production symlink enabled during NEW flow: $PROD_ENABLED_PATH"
+          rm -f "$PROD_ENABLED_PATH"
+        fi
+        if [ -n "$STAGE_LINK_PATH" ] && [ -n "$STAGE_CONF_PATH" ]; then
+          info "Restoring staged SSL symlink: $STAGE_LINK_PATH -> $STAGE_CONF_PATH"
+          ln -sfn "$STAGE_CONF_PATH" "$STAGE_LINK_PATH"
+        fi
+      fi
     fi
 
-    if [ -n "$PROD_MOVED_PATH" ] && [ -e "$PROD_MOVED_PATH" ]; then
-      info "Restoring production entry to: $PROD_ENABLED_PATH"
-      mv -f "$PROD_MOVED_PATH" "$PROD_ENABLED_PATH"
-    fi
-
-    # Restore ECC backup if we removed the live dir earlier
-    if [ "$ECC_REMOVED" = "yes" ] && [ -n "$ECC_BACKUP" ] && [ -d "$ECC_BACKUP" ]; then
-      info "Restoring ECC backup from: $ECC_BACKUP -> $ECC_DIR"
-      rm -rf "$ECC_DIR"
-      cp -a "$ECC_BACKUP" "$ECC_DIR"
+    # Restore the old ACME state only when issuance did not produce a usable
+    # certificate. Once a certificate exists, preserve it for recovery instead
+    # of destroying the successful issuance during an Nginx-side rollback.
+    if [ "$ECC_STATE_CHANGED" = "yes" ] && [ "$CERT_ISSUED" != "yes" ]; then
+      if [ -n "$ECC_BACKUP" ] && [ -d "$ECC_BACKUP" ]; then
+        info "Restoring ECC backup from: $ECC_BACKUP -> $ECC_DIR"
+        rm -rf "$ECC_DIR"
+        cp -a "$ECC_BACKUP" "$ECC_DIR"
+      elif [ -d "$ECC_DIR" ]; then
+        info "Removing newly-created ECC state after failed issuance: $ECC_DIR"
+        rm -rf "$ECC_DIR"
+      fi
+    elif [ "$CERT_ISSUED" = "yes" ]; then
+      warn "Preserving the issued certificate at $ECC_DIR for recovery. Review Nginx configuration before retrying."
     fi
 
     # Validate & reload only if nginx exists
@@ -116,7 +189,7 @@ on_exit() {
   :
 }
 
-trap 'rollback "received interrupt/signal"' INT TERM
+trap 'rollback "received interrupt/signal"' INT TERM HUP
 trap 'rollback "command failed at line $LINENO"' ERR
 trap 'on_exit' EXIT
 
@@ -157,6 +230,21 @@ validate_domain() {
   echo "$d"
 }
 
+# ---------- Flow selection ----------
+select_run_mode() {
+  local mode_in="${1:-}"
+  if [ -z "$mode_in" ]; then
+    read -r -p "INPUT: choose certificate flow [renew/new] (default: renew): " mode_in || true
+  fi
+  case "${mode_in,,}" in
+    ""|renew|r) echo "renew" ;;
+    new|n)      echo "new" ;;
+    *)
+      die "Invalid flow '$mode_in'. Expected: renew or new."
+      ;;
+  esac
+}
+
 # ---------- Nginx prod entry detection ----------
 detect_prod_enabled_entry() {
   local d="$1"
@@ -171,11 +259,33 @@ detect_prod_enabled_entry() {
   else
     # Try strict match in directory listing (no globbing in filesystem ops)
     local matches
-    matches="$(ls -1 "$NGINX_ENABLED" 2>/dev/null | awk -v d="$d" '$0==d || $0==(d".conf") {print $0}' || true)"
+    matches="$(find "$NGINX_ENABLED" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | awk -v d="$d" '$0==d || $0==(d".conf") {print $0}' || true)"
     if [ -n "$matches" ]; then
       found="${NGINX_ENABLED}/$(echo "$matches" | head -n 1)"
       warn "Multiple candidates may exist; selecting first match: $found"
     fi
+  fi
+
+  if [ -z "$found" ] && [ -d "$TEMP_DIR" ]; then
+    local candidate candidate_target expected_prod
+    expected_prod="${NGINX_ENABLED}/${d}.conf"
+    while IFS= read -r candidate; do
+      [ -n "$candidate" ] || continue
+      candidate_target="$(readlink -f "$candidate" 2>/dev/null || true)"
+      case "$candidate_target" in
+        "${NGINX_AVAILABLE}/${d}.conf"|"${NGINX_AVAILABLE}/${d}")
+          warn "Recovering orphaned production entry: $candidate -> $expected_prod"
+          mv -f "$candidate" "$expected_prod"
+          found="$expected_prod"
+          break
+          ;;
+      esac
+    done < <(
+      find "$TEMP_DIR" -mindepth 1 -maxdepth 1 \( -name "${d}.conf*" -o -name "$d" \) \
+        -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | cut -d' ' -f2-
+    )
   fi
 
   [ -n "$found" ] || die "Could not find production enabled site entry for '$d' in $NGINX_ENABLED.
@@ -183,6 +293,44 @@ Expected one of:
   - ${NGINX_ENABLED}/${d}.conf
   - ${NGINX_ENABLED}/${d}
 Fix: create/enable the site entry or adjust detection logic for your naming."
+
+  echo "$found"
+}
+
+validate_production_enabled_entry() {
+  local domain="$1" enabled_path="$2" real_target
+  real_target="$(readlink -f "$enabled_path" 2>/dev/null || true)"
+
+  case "$real_target" in
+    "${NGINX_AVAILABLE}/${domain}.conf"|"${NGINX_AVAILABLE}/${domain}")
+      return 0
+      ;;
+  esac
+
+  die "Enabled entry for '$domain' is not the production configuration: $enabled_path -> ${real_target:-unresolved}.
+The renewal workflow will not treat a staged HTTP-only config as production.
+Restore it with:
+  sudo ln -sfn ${NGINX_AVAILABLE}/${domain}.conf ${NGINX_ENABLED}/${domain}.conf
+Then run: sudo nginx -t && sudo systemctl reload nginx"
+}
+
+detect_prod_available_entry() {
+  local d="$1"
+  local c1="${NGINX_AVAILABLE}/${d}.conf"
+  local c2="${NGINX_AVAILABLE}/${d}"
+  local found=""
+
+  if [ -f "$c1" ]; then
+    found="$c1"
+  elif [ -f "$c2" ]; then
+    found="$c2"
+  fi
+
+  [ -n "$found" ] || die "Could not find production site config for '$d' in $NGINX_AVAILABLE.
+Expected one of:
+  - ${NGINX_AVAILABLE}/${d}.conf
+  - ${NGINX_AVAILABLE}/${d}
+Fix: place your full 80/443 production config in sites-available."
 
   echo "$found"
 }
@@ -202,6 +350,31 @@ detect_stage_conf() {
   [ -n "$found" ] || die "Staged SSL config not found for '$d'.
 Expected: ${SSL_REPO}/${d}_ssl.conf
 Fix: create that file or adjust SSL_REPO path."
+
+  echo "$found"
+}
+
+detect_stage_enabled_entry() {
+  local d="$1"
+  local c1="${NGINX_ENABLED}/${d}_ssl.conf"
+  local c2="${NGINX_ENABLED}/${d}_ssl"
+  local found=""
+
+  if [ -e "$c1" ]; then
+    found="$c1"
+  elif [ -e "$c2" ]; then
+    found="$c2"
+  fi
+
+  [ -n "$found" ] || die "Enabled staged SSL entry not found for '$d' in $NGINX_ENABLED.
+Expected one of:
+  - ${NGINX_ENABLED}/${d}_ssl.conf (symlink preferred)
+  - ${NGINX_ENABLED}/${d}_ssl
+Fix: enable your staged SSL config symlink before running NEW flow."
+
+  if [ ! -L "$found" ]; then
+    warn "Expected a symlink for staged SSL entry, but found a non-symlink path: $found"
+  fi
 
   echo "$found"
 }
@@ -238,22 +411,40 @@ detect_zone_apex() {
 }
 
 get_auth_ns_list() {
-  local zone="$1"
-  dig +short NS "$zone" 2>/dev/null | sed 's/\.$//' | sed '/^\s*$/d' || true
+  local zone="$1" resolver ns_list
+  for resolver in "${PUBLIC_RESOLVERS[@]}" ""; do
+    if [ -n "$resolver" ]; then
+      ns_list="$(dig +time=3 +tries=1 +short NS "$zone" @"$resolver" 2>/dev/null || true)"
+    else
+      ns_list="$(dig +time=3 +tries=1 +short NS "$zone" 2>/dev/null || true)"
+    fi
+    ns_list="$(sed 's/\.$//' <<<"$ns_list" | sed '/^\s*$/d')"
+    if [ -n "$ns_list" ]; then
+      printf '%s\n' "$ns_list"
+      return 0
+    fi
+  done
+  return 1
 }
 
 resolve_ns_ips() {
   local ns="$1"
-  local ips4 ips6
+  local ips4 ips6=""
   ips4="$(dig +short A "$ns" 2>/dev/null | sed '/^\s*$/d' || true)"
-  ips6="$(dig +short AAAA "$ns" 2>/dev/null | sed '/^\s*$/d' || true)"
+  if [ "$CHECK_AUTH_IPV6" = "yes" ]; then
+    ips6="$(dig +short AAAA "$ns" 2>/dev/null | sed '/^\s*$/d' || true)"
+  fi
   { [ -n "$ips4" ] && echo "$ips4"; [ -n "$ips6" ] && echo "$ips6"; } | sed '/^\s*$/d' || true
 }
 
 dig_txt_authoritative_verbose() {
-  local fqdn="$1" ip="$2"
-  # Show header status + answer section only
-  dig +time=2 +tries=1 +norecurse +noall +comments +answer TXT "$fqdn" @"$ip" 2>/dev/null || true
+  local fqdn="$1" ip="$2" out
+  # Prefer UDP, then retry over TCP for nameservers that drop large or IPv6 UDP responses.
+  out="$(dig +time=2 +tries=1 +norecurse +noall +comments +answer TXT "$fqdn" @"$ip" 2>/dev/null || true)"
+  if ! grep -q '^;; ->>HEADER<<-' <<<"$out"; then
+    out="$(dig +tcp +time=3 +tries=1 +norecurse +noall +comments +answer TXT "$fqdn" @"$ip" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "$out"
 }
 
 # Check that acme.sh produced usable cert/key artifacts (best-effort sanity gate).
@@ -396,6 +587,66 @@ parse_expected_txt_from_issue_output() {
 
 # ---------- Main ----------
 main() {
+  local mode_arg=""
+  local domain_arg=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --mode)
+        [ "$#" -ge 2 ] || die "Missing value for --mode. Usage: $0 [--domain FQDN] [--mode renew|new]"
+        mode_arg="$2"
+        shift 2
+        ;;
+      --domain)
+        [ "$#" -ge 2 ] || die "Missing value for --domain. Usage: $0 [--domain FQDN] [--mode renew|new]"
+        domain_arg="$2"
+        shift 2
+        ;;
+      --help|-h)
+        cat <<'USAGE'
+Usage: acme_dns_manual_nginx_swap.sh [--domain FQDN] [--mode renew|new]
+
+Without --domain, the script prompts for the domain.
+
+Operator instructions:
+  1. Confirm the domain and mode before continuing.
+  2. Keep DNS provider access ready for the apex and www TXT records.
+  3. Paste the exact acme.sh TXT values without quotes or extra spaces.
+  4. Wait for public and authoritative DNS checks to pass.
+  5. Approve certificate installation only after the checks pass.
+  6. After SUCCESS, verify the served certificate and run:
+       TARGET_URL=https://FQDN npm run test:strict
+
+Modes:
+  renew  Existing production Nginx entry is swapped to staged SSL, then restored.
+  new    Existing staged SSL entry remains active until production is enabled.
+
+NEW WORKFLOW INSTRUCTIONS:
+  1. Put the staged challenge config at:
+       /etc/nginx/sites-available/ssl_conf_repo/FQDN_ssl.conf
+  2. Enable it as:
+       /etc/nginx/sites-enabled/FQDN_ssl.conf
+  3. Put the complete production 80/443 config at:
+       /etc/nginx/sites-available/FQDN.conf
+  4. Validate the staged configuration with nginx -t.
+  5. Run:
+       sudo ./acme_dns_manual_nginx_swap.sh --domain FQDN --mode new
+  6. Complete both DNS TXT challenges and approve installation.
+  7. The script installs the certificate, switches the enabled link to
+     FQDN.conf, reloads Nginx, and verifies the served certificate.
+
+Safety:
+  The workflow is interactive, serialized by a lock, and stops on failed checks.
+  After the SSL staging swap, enter 'r' or 'restore' at any prompt to restore
+  the full pre-swap Nginx configuration, reload Nginx, and quit safely.
+USAGE
+        return 0
+        ;;
+      *)
+        die "Unknown argument '$1'. Usage: $0 [--domain FQDN] [--mode renew|new]"
+        ;;
+    esac
+  done
+
   require_root
   acquire_lock
 
@@ -409,61 +660,95 @@ main() {
   mkdir -p "$TEMP_DIR" "$LOG_DIR"
 
   echo
-  read -r -p "INPUT: enter domain name (e.g., example.com): " DOMAIN_RAW || true
-  DOMAIN="$(validate_domain "${DOMAIN_RAW:-}")"
+  if [ -n "$domain_arg" ]; then
+    DOMAIN="$(validate_domain "$domain_arg")"
+  else
+    read -r -p "INPUT: enter domain name (e.g., example.com): " DOMAIN_RAW || true
+    DOMAIN="$(validate_domain "${DOMAIN_RAW:-}")"
+  fi
   WWW="www.${DOMAIN}"
+  RUN_MODE="$(select_run_mode "$mode_arg")"
   ECC_DIR="/root/.acme.sh/${DOMAIN}_ecc"
 
   LOG_FILE="${LOG_DIR}/acme-dns-manual-${DOMAIN}-$(date +%F-%H%M%S).log"
   # Start logging AFTER we know the domain for per-domain log filenames.
   exec > >(tee -a "$LOG_FILE") 2>&1
   info "Logging to: $LOG_FILE"
+  info "Selected certificate flow: $RUN_MODE"
 
-  info "stdout - verify default CA is Let's Encrypt"
+  info "Set default CA to Let's Encrypt"
   run "$ACME" --set-default-ca --server letsencrypt
 
-  info "stdout - acme.sh --list"
+  info "Show acme.sh certificate list"
   run "$ACME" --list
 
-  info "stdout - acme.sh --info (best-effort; may be empty if not issued yet)"
+  info "Show acme.sh certificate information"
   run "$ACME" --info -d "$DOMAIN" --ecc || warn "No existing ECC info for $DOMAIN (this is ok if you're re-issuing)."
   if [ "$WWW" != "$DOMAIN" ]; then
     info "SAN note: acme.sh stores the SAN entry for $WWW inside the same config dir as $DOMAIN (usually ${ECC_DIR}/${DOMAIN}.conf). A separate www.* conf directory is not created."
   fi
 
-  # Detect production enabled entry + staged SSL conf
-  PROD_ENABLED_PATH="$(detect_prod_enabled_entry "$DOMAIN")"
-  STAGE_CONF_PATH="$(detect_stage_conf "$DOMAIN")"
-  STAGE_LINK_PATH="${NGINX_ENABLED}/$(basename "$PROD_ENABLED_PATH")"
+  if [ "$RUN_MODE" = "renew" ]; then
+    # Detect production enabled entry + staged SSL conf
+    PROD_ENABLED_PATH="$(detect_prod_enabled_entry "$DOMAIN")"
+    validate_production_enabled_entry "$DOMAIN" "$PROD_ENABLED_PATH"
+    STAGE_CONF_PATH="$(detect_stage_conf "$DOMAIN")"
+    STAGE_LINK_PATH="${NGINX_ENABLED}/$(basename "$PROD_ENABLED_PATH")"
 
-  info "Detected production enabled entry: $PROD_ENABLED_PATH"
-  info "Staged SSL conf to enable: $STAGE_CONF_PATH"
-  info "Staged symlink path will be: $STAGE_LINK_PATH"
+    info "Detected production enabled entry: $PROD_ENABLED_PATH"
+    info "Staged SSL conf to enable: $STAGE_CONF_PATH"
+    info "Staged symlink path will be: $STAGE_LINK_PATH"
 
-  # Swap nginx: move prod -> temp, enable stage
-  info "stdout - move production entry to temp: $TEMP_DIR"
-  local moved_target="${TEMP_DIR}/$(basename "$PROD_ENABLED_PATH")"
-  if [ -e "$moved_target" ]; then
-    moved_target="${moved_target}.bak.$(date +%F-%H%M%S)"
-    warn "Temp target already existed; using unique name: $moved_target"
-  fi
-  run mv -f "$PROD_ENABLED_PATH" "$moved_target"
-  PROD_MOVED_PATH="$moved_target"
-  ROLLBACK_NEEDED="yes"
+    # Swap nginx: move prod -> temp, enable stage
+    info "Move production entry to temporary storage: $TEMP_DIR"
+    local moved_target
+    moved_target="${TEMP_DIR}/$(basename "$PROD_ENABLED_PATH")"
+    if [ -e "$moved_target" ]; then
+      moved_target="${moved_target}.bak.$(date +%F-%H%M%S)"
+      warn "Temp target already existed; using unique name: $moved_target"
+    fi
+    run mv -f "$PROD_ENABLED_PATH" "$moved_target"
+    PROD_MOVED_PATH="$moved_target"
+    ROLLBACK_NEEDED="yes"
 
-  info "stdout - create symlink for staged ssl conf in sites-enabled"
-  run ln -sfn "$STAGE_CONF_PATH" "$STAGE_LINK_PATH"
+    info "Enable staged SSL configuration"
+    run ln -sfn "$STAGE_CONF_PATH" "$STAGE_LINK_PATH"
 
-  info "stdout - nginx status + test + reload"
-  run systemctl status nginx --no-pager || true
-  run nginx -t
-  run systemctl reload nginx
-  run systemctl status nginx --no-pager || true
+    info "Validate and reload Nginx after staging swap"
+    validate_reload_nginx
 
-  echo
-  info "Checkpoint: Nginx staging swap is active."
-  if ! ask_yes_no "Report SUCCESS so far and proceed to acme issue/renew for '$DOMAIN' and '$WWW'?"; then
-    rollback "user chose not to proceed at checkpoint"
+    echo
+    info "Checkpoint: Nginx staging swap is active (RENEW flow)."
+    if ! ask_yes_no "Report SUCCESS so far and proceed to acme issue/renew for '$DOMAIN' and '$WWW'?"; then
+      rollback "user chose not to proceed at checkpoint"
+    fi
+  else
+    # NEW flow: staged SSL link already enabled; production full config lives in sites-available.
+    STAGE_LINK_PATH="$(detect_stage_enabled_entry "$DOMAIN")"
+    STAGE_CONF_PATH="$(readlink -f "$STAGE_LINK_PATH" 2>/dev/null || true)"
+    [ -n "$STAGE_CONF_PATH" ] || STAGE_CONF_PATH="$STAGE_LINK_PATH"
+
+    PROD_AVAILABLE_PATH="$(detect_prod_available_entry "$DOMAIN")"
+    PROD_ENABLED_PATH="${NGINX_ENABLED}/$(basename "$PROD_AVAILABLE_PATH")"
+
+    if [ "$PROD_ENABLED_PATH" = "$STAGE_LINK_PATH" ]; then
+      die "NEW flow conflict: production enabled path equals staged SSL link path ($PROD_ENABLED_PATH). Ensure staged link uses *_ssl naming and production file is ${NGINX_AVAILABLE}/${DOMAIN}.conf."
+    fi
+
+    info "Detected staged SSL enabled entry (already active): $STAGE_LINK_PATH"
+    info "Resolved staged SSL config target: $STAGE_CONF_PATH"
+    info "Detected production config in sites-available: $PROD_AVAILABLE_PATH"
+    info "Production symlink target path (to be enabled later): $PROD_ENABLED_PATH"
+
+    info "Validate and reload Nginx with staged SSL active"
+    validate_reload_nginx
+
+    echo
+    info "Checkpoint: Existing staged SSL symlink is active (NEW flow)."
+    ROLLBACK_NEEDED="yes"
+    if ! ask_yes_no "Proceed to issue/renew cert for '$DOMAIN' and '$WWW' using NEW flow?"; then
+      rollback "user chose not to proceed at checkpoint"
+    fi
   fi
 
   pause_enter "Prepare to add TWO DNS TXT records in your DNS provider when prompted by acme.sh. Ensure you can edit the zone now."
@@ -471,26 +756,26 @@ main() {
   # Backup ECC entry
   if [ -d "$ECC_DIR" ]; then
     ECC_BACKUP="${ECC_DIR}.bak.$(date +%F-%H%M%S)"
-    info "stdout - backup ECC cert entry"
+    info "Back up the existing ECC certificate state"
     run cp -a "$ECC_DIR" "$ECC_BACKUP"
   else
     warn "ECC directory not found at $ECC_DIR. This is ok if you're issuing fresh; backup skipped."
   fi
 
-  # Remove ECC entry cleanly
-  info "stdout - remove ECC cert entry cleanly (acme.sh --remove), then filesystem cleanup"
-  run "$ACME" --remove -d "$DOMAIN" --ecc || warn "acme.sh --remove reported an issue (often ok if entry already absent)."
-  run rm -rf "$ECC_DIR" || warn "Failed to remove $ECC_DIR (permissions/lock). Remove manually if needed."
-  ECC_REMOVED="yes"
+  # Preserve the existing ACME state until the replacement certificate is verified.
+  # --force makes acme.sh issue a fresh certificate without deleting the current one first.
+  ECC_STATE_CHANGED="yes"
+  info "Preserving existing ECC state while issuing the replacement certificate"
 
   # Issue (manual DNS) - capture output for TXT parsing
-  local issue_out issue_rc issue_needs_dns="no" cert_ready_after_issue="no"
+  local issue_out issue_rc cert_ready_after_issue="no"
   issue_out="$(mktemp)"
-  info "stdout - run acme.sh --issue (manual DNS). This will print required TXT records."
+  info "Issue certificate with manual DNS; acme.sh will print the required TXT records"
   set +e
   "$ACME" --issue \
     -d "$DOMAIN" -d "$WWW" \
     --keylength ec-256 \
+    --force \
     --dns \
     --yes-I-know-dns-manual-mode-enough-go-ahead-please \
     --dnssleep 120 \
@@ -500,7 +785,6 @@ main() {
   if [ "$issue_rc" -ne 0 ]; then
     if grep -qi "DNS record not yet added" "$issue_out" || grep -qi "Please add the TXT records" "$issue_out"; then
       warn "acme.sh --issue exited $issue_rc because TXT records are not yet added (manual DNS). Continuing to propagation checks with the printed tokens."
-      issue_needs_dns="yes"
     else
       err "acme.sh --issue failed (exit $issue_rc). Inspect output above and log: $LOG_FILE"
       err "Common fixes: wrong DNS provider zone, blocked outbound DNS, or acme.sh account/CA issues."
@@ -512,7 +796,6 @@ main() {
       info "Decision: acme.sh --issue already produced a certificate (TXT likely still present/valid)."
     else
       warn "acme.sh --issue exited 0 but no cert files were found in $ECC_DIR. Will continue with DNS checks and a renew attempt."
-      issue_needs_dns="yes"
     fi
   fi
 
@@ -526,16 +809,17 @@ main() {
     info "Parsed expected TXT values from acme.sh output:"
     info "  _acme-challenge.${DOMAIN}      TXT: $expected_apex"
     info "  _acme-challenge.${WWW}         TXT: $expected_www"
+  elif [ "$cert_ready_after_issue" = "yes" ]; then
+    warn "acme.sh already completed issuance; its successful output did not include TXT challenge blocks."
+    info "Using presence checks for the currently published TXT records instead of asking for duplicate token input."
+    expected_apex=""
+    expected_www=""
   else
     warn "Could not reliably parse both TXT values from acme.sh output."
     warn "This can happen if acme.sh output format differs or the provider prints multi-line tokens."
     echo
-    read -r -p "INPUT: Paste TXT value for _acme-challenge.${DOMAIN} (no surrounding quotes): " expected_apex || true
-    read -r -p "INPUT: Paste TXT value for _acme-challenge.${WWW} (no surrounding quotes): " expected_www || true
-    expected_apex="${expected_apex//\"/}"
-    expected_www="${expected_www//\"/}"
-    [ -n "$expected_apex" ] || die "Missing expected TXT for _acme-challenge.${DOMAIN}. Cannot safely verify propagation."
-    [ -n "$expected_www" ]  || die "Missing expected TXT for _acme-challenge.${WWW}. Cannot safely verify propagation."
+    read_txt_value_or_restore "Paste TXT value for _acme-challenge.${DOMAIN} (no surrounding quotes)" expected_apex
+    read_txt_value_or_restore "Paste TXT value for _acme-challenge.${WWW} (no surrounding quotes)" expected_www
   fi
 
   if [ "$cert_ready_after_issue" = "yes" ]; then
@@ -570,11 +854,15 @@ main() {
     warn "DNS not fully propagated yet."
     warn "Guidance: wait 2–10 minutes, ensure you created records in the correct DNS zone, and confirm no old TXT records conflict."
     echo
-    read -r -p "ACTION: press 't' to try again, or 'q' to restore nginx config and quit: " choice || true
+    local quit_action="rollback and quit"
+    if [ "$RUN_MODE" = "renew" ]; then
+      quit_action="restore nginx config and quit"
+    fi
+    read -r -p "ACTION: press 't' to try again, or 'r' to restore and quit (${quit_action}): " choice || rollback "input closed at restore checkpoint"
     case "${choice,,}" in
       t) continue ;;
-      q) rollback "user quit during DNS propagation checks" ;;
-      *) warn "Unrecognized choice '$choice'. Type 't' to retry or 'q' to quit." ;;
+      r|restore|q|quit) rollback "operator requested full configuration restore during DNS propagation" ;;
+      *) warn "Unrecognized choice '$choice'. Type 't' to retry or 'r' to restore and quit." ;;
     esac
   done
 
@@ -597,7 +885,7 @@ main() {
     # Renew (force when we haven't produced a cert yet)
     local renew_out renew_rc
     renew_out="$(mktemp)"
-    info "stdout - run acme.sh --renew (manual DNS, ECC)"
+    info "Renew certificate with manual DNS and ECC"
     local renew_cmd=( "$ACME" --renew -d "$DOMAIN" -d "$WWW" --ecc --dns --yes-I-know-dns-manual-mode-enough-go-ahead-please --debug 2 )
     [ -n "$renew_force_flag" ] && renew_cmd+=( "$renew_force_flag" )
     set +e
@@ -623,40 +911,54 @@ main() {
 
   # Ensure cert artifacts exist before proceeding
   if cert_files_present "$ECC_DIR"; then
+    CERT_ISSUED="yes"
     info "Cert/key artifacts present under $ECC_DIR. Proceeding to install."
   else
     rollback "expected certificate files missing after issue/renew"
   fi
 
-  info "stdout - acme.sh --info and --list after issuance"
+  info "Show certificate information after issuance"
   run "$ACME" --info -d "$DOMAIN" --ecc
   run "$ACME" --info -d "$WWW"    --ecc
   run "$ACME" --list
 
   echo
-  if ! ask_yes_no "Proceed to restore production nginx config and install the cert paths?"; then
-    rollback "user chose not to restore/install after successful renew"
-  fi
-
-  # Restore prod nginx config (remove staged symlink and move back prod)
-  info "stdout - delete staged symlink in sites-enabled"
-  if [ -L "$STAGE_LINK_PATH" ]; then
-    run rm -f "$STAGE_LINK_PATH"
+  if [ "$RUN_MODE" = "renew" ]; then
+    if ! ask_yes_no "Proceed to restore production nginx config and install the cert paths?"; then
+      rollback "user chose not to restore/install after successful renew"
+    fi
   else
-    warn "Expected staged symlink not found at $STAGE_LINK_PATH (it may have been modified). Continuing."
+    if ! ask_yes_no "Proceed to install cert paths and enable production config from sites-available?"; then
+      rollback "user chose not to enable production config after successful issue/renew"
+    fi
   fi
 
-  info "stdout - restore production entry back into sites-enabled"
-  if [ -e "$PROD_MOVED_PATH" ]; then
-    run mv -f "$PROD_MOVED_PATH" "$PROD_ENABLED_PATH"
+  # RENEW flow: restore prod nginx config (remove staged symlink and move back prod)
+  if [ "$RUN_MODE" = "renew" ]; then
+    info "Remove staged SSL configuration"
+    if [ -L "$STAGE_LINK_PATH" ]; then
+      run rm -f "$STAGE_LINK_PATH"
+    else
+      warn "Expected staged symlink not found at $STAGE_LINK_PATH (it may have been modified). Continuing."
+    fi
+
+    info "Restore production configuration"
+    if [ -e "$PROD_MOVED_PATH" ]; then
+      run mv -f "$PROD_MOVED_PATH" "$PROD_ENABLED_PATH"
+    else
+      die "Production entry missing in temp location ($PROD_MOVED_PATH). Cannot safely restore. Restore manually and rerun nginx -t."
+    fi
+  fi
+
+  # Resolve production config path for ssl_certificate extraction.
+  local prod_real prod_conf ssl_cert ssl_key installed_cert_path
+  installed_cert_path=""
+  if [ "$RUN_MODE" = "renew" ]; then
+    prod_real="$(readlink -f "$PROD_ENABLED_PATH" 2>/dev/null || true)"
+    prod_conf="${prod_real:-$PROD_ENABLED_PATH}"
   else
-    die "Production entry missing in temp location ($PROD_MOVED_PATH). Cannot safely restore. Restore manually and rerun nginx -t."
+    prod_conf="$PROD_AVAILABLE_PATH"
   fi
-
-  # Detect ssl_certificate paths from production config (best-effort)
-  local prod_real prod_conf ssl_cert ssl_key
-  prod_real="$(readlink -f "$PROD_ENABLED_PATH" 2>/dev/null || true)"
-  prod_conf="${prod_real:-$PROD_ENABLED_PATH}"
 
   ssl_cert="$(awk '
     $1=="ssl_certificate" {
@@ -674,11 +976,12 @@ main() {
     info "  ssl_certificate_key: $ssl_key"
     mkdir -p "$(dirname "$ssl_cert")" "$(dirname "$ssl_key")" || true
 
-    info "stdout - acme.sh --install-cert using detected nginx paths (best practice)"
+    info "Install certificate using paths detected from the production Nginx config"
     run "$ACME" --install-cert -d "$DOMAIN" --ecc \
       --key-file       "$ssl_key" \
       --fullchain-file "$ssl_cert" \
-      --reloadcmd      "systemctl reload nginx"
+      --reloadcmd      "true"
+    installed_cert_path="$ssl_cert"
   else
     warn "Could not detect ssl_certificate / ssl_certificate_key in production config: $prod_conf"
     warn "Fallback: installing cert to /etc/ssl/acme/${DOMAIN}/ (you must ensure nginx references these paths or already references acme.sh live paths)."
@@ -687,36 +990,95 @@ main() {
     mkdir -p "$fallback_dir"
     local fb_key="${fallback_dir}/privkey.ec-256.pem"
     local fb_chain="${fallback_dir}/fullchain.ec-256.pem"
+    ssl_key="$fb_key"
+    ssl_cert="$fb_chain"
 
     run "$ACME" --install-cert -d "$DOMAIN" --ecc \
       --key-file       "$fb_key" \
       --fullchain-file "$fb_chain" \
-      --reloadcmd      "systemctl reload nginx"
+      --reloadcmd      "true"
+    installed_cert_path="$fb_chain"
   fi
 
-  info "stdout - nginx status + test + reload"
-  run systemctl status nginx --no-pager || true
-  run nginx -t
-  run systemctl reload nginx
-  run systemctl status nginx --no-pager || true
+  if [ "$RUN_MODE" = "new" ]; then
+    info "Switch the enabled entry from staged SSL to production"
+    if [ -L "$STAGE_LINK_PATH" ]; then
+      run rm -f "$STAGE_LINK_PATH"
+    else
+      warn "Expected staged ssl symlink not found at $STAGE_LINK_PATH. Continuing."
+    fi
 
-  # Final verification (localhost)
+    if [ -e "$PROD_ENABLED_PATH" ]; then
+      if [ -L "$PROD_ENABLED_PATH" ]; then
+        run rm -f "$PROD_ENABLED_PATH"
+      else
+        die "Target production enabled path exists and is not a symlink: $PROD_ENABLED_PATH"
+      fi
+    fi
+
+    run ln -sfn "$PROD_AVAILABLE_PATH" "$PROD_ENABLED_PATH"
+    NEW_MODE_LINK_SWITCHED="yes"
+  fi
+
+  if [ "$RUN_MODE" = "new" ]; then
+    local nginx_dump
+    if ! nginx_dump="$(nginx -T 2>&1)"; then
+      rollback "Nginx test could not load the NEW production configuration"
+    fi
+    if ! grep -Fq "server_name ${DOMAIN} ${WWW};" <<<"$nginx_dump"; then
+      rollback "NEW production server_name was not loaded by Nginx"
+    fi
+    if ! grep -Fq "ssl_certificate ${ssl_cert};" <<<"$nginx_dump" || \
+      ! grep -Fq "ssl_certificate_key ${ssl_key};" <<<"$nginx_dump"; then
+      rollback "NEW production certificate paths were not loaded by Nginx"
+    fi
+  fi
+
+  info "Validate and reload Nginx after certificate installation"
+  validate_reload_nginx
+
+  # Final verification. Require the running origin Nginx workers to serve the
+  # exact certificate installed above. The public hostname may be proxied by
+  # Cloudflare, which intentionally presents Cloudflare's edge certificate;
+  # therefore this check must connect to the local origin while preserving SNI.
+  # Poll after reload because graceful Nginx reloads can leave old workers
+  # alive briefly.
   echo
-  info "Final verify: show served certificate dates via openssl (localhost:443)"
-  set +e
-  openssl s_client -servername "$DOMAIN" -connect 127.0.0.1:443 </dev/null 2>/dev/null \
-    | openssl x509 -noout -subject -issuer -dates
-  local ossl_rc="$?"
-  set -e
-  if [ "$ossl_rc" -ne 0 ]; then
-    warn "OpenSSL verification failed. Nginx may not be listening on 443 locally, or firewall/port mapping differs. Validate externally with: openssl s_client -servername $DOMAIN -connect $DOMAIN:443"
+  info "Final verify: compare installed and served origin certificates (127.0.0.1:443 with SNI ${DOMAIN})"
+  local served_cert_file installed_fingerprint served_fingerprint served_verified="no" attempt
+  if ! openssl x509 -in "$installed_cert_path" -noout -checkhost "$DOMAIN" >/dev/null 2>&1 || \
+     ! openssl x509 -in "$installed_cert_path" -noout -checkhost "$WWW" >/dev/null 2>&1; then
+    rollback "the installed certificate does not cover both $DOMAIN and $WWW"
   fi
+  installed_fingerprint="$(openssl x509 -in "$installed_cert_path" -noout -fingerprint -sha256)"
+  for attempt in $(seq 1 20); do
+    served_cert_file="$(mktemp)"
+    if openssl s_client -4 -servername "$DOMAIN" -connect "127.0.0.1:443" </dev/null 2>/dev/null \
+      | openssl x509 -out "$served_cert_file" 2>/dev/null && \
+      openssl x509 -in "$served_cert_file" -noout -checkhost "$DOMAIN" >/dev/null 2>&1 && \
+      openssl x509 -in "$served_cert_file" -noout -checkhost "$WWW" >/dev/null 2>&1; then
+      served_fingerprint="$(openssl x509 -in "$served_cert_file" -noout -fingerprint -sha256)"
+      if [ -n "$installed_fingerprint" ] && [ "$installed_fingerprint" = "$served_fingerprint" ]; then
+        info "Nginx is serving the installed certificate for $DOMAIN and $WWW."
+        openssl x509 -in "$served_cert_file" -noout -subject -issuer -dates
+        served_verified="yes"
+        rm -f "$served_cert_file"
+        break
+      fi
+    fi
+    rm -f "$served_cert_file"
+    [ "$attempt" -eq 20 ] || sleep 1
+  done
+  if [ "$served_verified" != "yes" ]; then
+    rollback "Nginx is not serving the newly installed certificate for $DOMAIN after reload"
+  fi
+  ECC_STATE_CHANGED="no"
 
   # Offer to purge ECC backup to keep filesystem tidy
   if [ -n "$ECC_BACKUP" ] && [ -d "$ECC_BACKUP" ]; then
     echo
     if ask_yes_no "Purge ECC backup directory now to save space? ($ECC_BACKUP)"; then
-      info "stdout - remove ECC backup at $ECC_BACKUP"
+      info "Remove ECC backup: $ECC_BACKUP"
       run rm -rf "$ECC_BACKUP"
     else
       info "Keeping ECC backup at $ECC_BACKUP"
