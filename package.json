@@ -5,6 +5,7 @@
   "description": "Automation and validation toolkit for manual DNS ACME renewals plus hardened Playwright checks.",
   "main": "index.js",
   "scripts": {
+    "git:update": "node scripts/git-update.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
@@ -23,16 +24,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/eagles-edu/renew_ssl.git"
+    "url": "git+https://github.com/eagles-edu/renew_dev_ssl.git"
   },
   "keywords": [],
   "author": "",
   "license": "Apache-2.0",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/eagles-edu/renew_ssl/issues"
+    "url": "https://github.com/eagles-edu/renew_dev_ssl/issues"
   },
-  "homepage": "https://github.com/eagles-edu/renew_ssl#readme",
+  "homepage": "https://github.com/eagles-edu/renew_dev_ssl#readme",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.58.2",

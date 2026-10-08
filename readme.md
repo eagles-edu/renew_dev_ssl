@@ -58,6 +58,8 @@ Completed on **February 9, 2026**.
 | `npm run check`                         | Full standard quality gate           | Recommended local pre-push command        | Lint + format + test pass                                      |
 | `npm run check:strict`                  | Full strict quality gate             | Release readiness/security gates          | Lint + format + strict test pass                               |
 | `npm run check:moodle-db`               | Moodle DB reachability probe         | Quick DB availability check on the host   | `config.php` credentials authenticate and `SELECT 1` succeeds  |
+| `npm run git:update`                    | Prefills the next `ACME_DEV_BETA_` commit message, then stages, commits, and pushes | Publish reviewed workspace changes | Edit the prefilled message or press Enter to accept it |
+| `npm run git:update -- --dry-run`        | Prints the next `ACME_DEV_BETA_` commit message | Preview the next version | No Git state changes |
 | `sudo ./acme_dns_manual_nginx_swap.sh`  | Renewal workflow                     | Manual DNS-based production renewal       | Script reaches `SUCCESS` and nginx restored                    |
 | `sudo ./update_domain_inventory.sh`     | Refresh domain inventory             | Before reviewing or batching renewals     | Live expiry dates and domain sections are regenerated          |
 | `sudo ./renew_all_domains.sh --dry-run` | Batch inventory preview              | Review domains and auto-selected flow     | Lists every inventory domain without changing state            |
