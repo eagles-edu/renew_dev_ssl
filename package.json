@@ -41,7 +41,7 @@
   "homepage": "https://github.com/eagles-edu/renew_dev_ssl#readme",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.58.2",
+    "@playwright/test": "^1.63.0",
     "@vitejs/plugin-react": "^6.1.2",
     "dotenv": "^17.2.4",
     "eslint": "^10.0.0",
