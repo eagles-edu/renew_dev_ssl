@@ -25,6 +25,12 @@ Completed on **February 9, 2026**.
   - Sequential wrapper for the clean domain inventory; preserves interactive DNS and Nginx checkpoints.
 - `update_domain_inventory.sh`
   - Refreshes the generated current/new inventory and live certificate expiry dates.
+- `setup_nginx_vhost.sh`
+  - Dry-run-first bootstrap for a new Nginx vhost with `/home/<domain>/public_html/` as its HTTP-01 webroot and the local OpenLiteSpeed backend by default.
+- `docs/gui for data in put.md`
+  - GUI requirements for vhost inventory, creation, editing, safe config generation, and Nginx/OpenLiteSpeed/PHP validation.
+- `docs/vhost-manager-user-manual.md`
+  - Illustrated local setup guide with step-by-step site creation and recommendations for permissions, firewall, PHP, CSP, and TLS.
 - `DOMAIN_CERTIFICATE_INVENTORY.md`
   - Generated grouped domain list with `CURRENT` and `NEW` sections.
 - `tests/ssl-health.spec.js`
@@ -38,31 +44,33 @@ Completed on **February 9, 2026**.
 
 ## Prerequisites
 
-1. Node `22.22.0` (`.nvmrc` and `.node-version` are pinned).
+1. Node `24.21.0` (`.nvmrc` and `.node-version` are pinned).
 2. npm.
 3. Linux host packages required by Playwright browsers (install per Playwright output if missing).
-4. Root access for production renewal (`acme_dns_manual_nginx_swap.sh` uses nginx/systemctl and `/root/.acme.sh`).
-5. Root access for the Moodle DB health probe (`scripts/moodle-db-healthcheck.sh` reads the live `config.php` and tests MariaDB locally).
+4. Root access for production renewal (`acme_dns_manual_nginx_swap.sh` uses nginx/systemctl and acme.sh state under `/root/.acme.sh` by default).
+5. An executable `acme.sh`; this server does not currently have it at `/root/.acme.sh/acme.sh`. Set `ACME_HOME` for its state directory and `ACME_BIN` when the executable is elsewhere.
+6. Valid Nginx site links before renewal. On this server `sudo nginx -T` currently fails because `/etc/nginx/sites-enabled/default` is a dangling link; the `eaglesvn.club` and `obgyn.eaglesvn.club` links also target missing files. Repair and validate these links before running a renewal.
 
 ## Command reference
 
-| Command                                 | Purpose                              | Typical use                               | Pass criteria                                                  |
-| --------------------------------------- | ------------------------------------ | ----------------------------------------- | -------------------------------------------------------------- |
-| `nvm use 22.22.0`                       | Use pinned Node runtime              | First step per shell/session              | `node -v` shows `v22.22.0`                                     |
-| `npm install`                           | Install/update dependencies          | Initial setup or after dependency changes | Completes without audit/build errors                           |
-| `npm run pw:install`                    | Download Playwright browser binaries | First setup, after Playwright upgrade     | Browser download succeeds                                      |
-| `npm run lint`                          | Static lint checks                   | Fast local check                          | Exit code `0`                                                  |
-| `npm run format:check`                  | Prettier conformance                 | Pre-commit formatting gate                | Exit code `0`                                                  |
-| `npm test`                              | Standard Playwright run              | Smoke checks and default CI behavior      | HTTPS tests pass; header checks run when target is non-default |
-| `npm run test:strict`                   | Force security-header assertions     | Security hardening gate                   | Fails unless non-default target has required headers           |
-| `npm run check`                         | Full standard quality gate           | Recommended local pre-push command        | Lint + format + test pass                                      |
-| `npm run check:strict`                  | Full strict quality gate             | Release readiness/security gates          | Lint + format + strict test pass                               |
-| `npm run check:moodle-db`               | Moodle DB reachability probe         | Quick DB availability check on the host   | `config.php` credentials authenticate and `SELECT 1` succeeds  |
-| `npm run git:update`                    | Prefills the next `ACME_DEV_BETA_` commit message, then stages, commits, and pushes | Publish reviewed workspace changes | Edit the prefilled message or press Enter to accept it |
-| `npm run git:update -- --dry-run`        | Prints the next `ACME_DEV_BETA_` commit message | Preview the next version | No Git state changes |
-| `sudo ./acme_dns_manual_nginx_swap.sh`  | Renewal workflow                     | Manual DNS-based production renewal       | Script reaches `SUCCESS` and nginx restored                    |
-| `sudo ./update_domain_inventory.sh`     | Refresh domain inventory             | Before reviewing or batching renewals     | Live expiry dates and domain sections are regenerated          |
-| `sudo ./renew_all_domains.sh --dry-run` | Batch inventory preview              | Review domains and auto-selected flow     | Lists every inventory domain without changing state            |
+| Command                                             | Purpose                                                                                                   | Typical use                               | Pass criteria                                                  |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------- |
+| `nvm use 24.21.0`                                   | Use pinned Node runtime                                                                                   | First step per shell/session              | `node -v` shows `v24.21.0`                                     |
+| `npm ci`                                            | Install dependencies from the lockfile                                                                    | Initial setup or after dependency changes | Completes without audit/build errors                           |
+| `npm run pw:install`                                | Download Playwright browser binaries                                                                      | First setup, after Playwright upgrade     | Browser download succeeds                                      |
+| `npm run lint`                                      | Static lint checks                                                                                        | Fast local check                          | Exit code `0`                                                  |
+| `npm run format:check`                              | Prettier conformance                                                                                      | Pre-commit formatting gate                | Exit code `0`                                                  |
+| `npm test`                                          | Standard Playwright run                                                                                   | Smoke checks and default CI behavior      | HTTPS tests pass; header checks run when target is non-default |
+| `npm run test:strict`                               | Force security-header assertions                                                                          | Security hardening gate                   | Fails unless non-default target has required headers           |
+| `npm run check`                                     | Full standard quality gate                                                                                | Recommended local pre-push command        | Lint + format + test pass                                      |
+| `npm run check:strict`                              | Full strict quality gate                                                                                  | Release readiness/security gates          | Lint + format + strict test pass                               |
+| `npm run git:update`                                | Prefills the next `ACME_DEV_BETA_` commit message, runs `npm run check`, then stages, commits, and pushes | Publish reviewed workspace changes        | Edit the prefilled message or press Enter to accept it         |
+| `npm run git:update -- --dry-run`                   | Prints the next `ACME_DEV_BETA_` commit message                                                           | Preview the next version                  | No Git state changes                                           |
+| `./setup_nginx_vhost.sh --domain FQDN`              | Preview new HTTP vhost, webroot, and local backend                                                        | Review before provisioning                | Prints plan only; does not write server files                  |
+| `sudo ./setup_nginx_vhost.sh --domain FQDN --apply` | Create and enable vhost, validate Nginx, then reload                                                      | New domain after Nginx config is valid    | `nginx -t` passes and reload succeeds                          |
+| `sudo ./acme_dns_manual_nginx_swap.sh`              | Renewal workflow                                                                                          | Manual DNS-based production renewal       | Script reaches `SUCCESS` and nginx restored                    |
+| `sudo ./update_domain_inventory.sh`                 | Refresh domain inventory                                                                                  | Before reviewing or batching renewals     | Live expiry dates and domain sections are regenerated          |
+| `sudo ./renew_all_domains.sh --dry-run`             | Batch inventory preview                                                                                   | Review domains and auto-selected flow     | Lists every inventory domain without changing state            |
 
 ## Flag and environment variable table
 
@@ -82,7 +90,6 @@ The wrapper intentionally keeps DNS entry and Nginx checkpoints interactive. Aft
 Supported wrapper options:
 
 ```bash
-cd /home/eagles/dockerz/renew_ssl
 ./renew_all_domains.sh --dry-run
 sudo ./renew_all_domains.sh
 sudo ./renew_all_domains.sh --mode renew
@@ -106,9 +113,47 @@ To process one domain while retaining inventory refresh and resume tracking, use
 | `PLAYWRIGHT_ENABLE_WEBKIT=1`            | `playwright.config.js`        | `0`                   | Adds WebKit project                                         | Safari-specific TLS/header confidence     |
 | `CI=true`                               | `playwright.config.js`        | auto in CI            | Enables retries/CI reporters                                | GitHub Actions and pipeline runs          |
 
+## Server webroot example
+
+This server uses the CyberPanel-style domain layout for the `eaglesvn.club` site:
+
+```text
+Domain:     eaglesvn.club
+Webroot:    /home/eaglesvn.club/public_html/
+Nginx root: /home/eaglesvn.club/public_html/
+```
+
+The directory exists on this host and is the `root` configured in its production vhost. This is the website document root. The renewal script currently uses manual DNS TXT validation, so it does not use this webroot for ACME challenges.
+
+## Local Vhost Manager
+
+For the complete first-run walkthrough, setting recommendations, diagrams, and troubleshooting, see the [Local Vhost Manager user manual](docs/vhost-manager-user-manual.md).
+
+Build the local browser manager and launch it explicitly as root:
+
+```bash
+npm run vhost:build
+sudo npm run vhost:start
+```
+
+Open `http://127.0.0.1:4310` in the server's VNC browser. The API listens on loopback only. Scan inventory and review a preview before applying any change. The first-run reset preview lists the affected files and diffs and identifies phpMyAdmin resources that will be preserved. Confirm the exact dangling Nginx links and stale OLS vhost reference in the preview; the manager validates both configs before it reloads either service.
+
+Generated files are rendered from variable-based templates in [`vhost-manager/boilerplate`](vhost-manager/boilerplate/README.md): Nginx production and SSL-renewal configs, OLS main and per-vhost configs, PHP ini, placeholder HTML, robots rules, and optional `.htaccess`. PHP common settings prefill from the chosen installed ini profile; simple controls and advanced `directive = value` overrides are reviewed and written to a private per-site ini while preserving the profile as its base. The shared profile remains unchanged. The global CSP source is [`vhost-manager/shared/csp-policy.txt`](vhost-manager/shared/csp-policy.txt). It covers the Eagles, GPTpatient, and EaglesVN domain families; Google Analytics/Tag Manager; GPTMD Supabase and OpenAI API sources; and requested ACB Bank and IcePanel endpoints. Fonts/Translate APIs, Brevo, jsDelivr, unpkg, AMP, YouTube, and hCaptcha are excluded as unused. The policy starts in report-only mode; each site can select it or use a custom policy. Shared proxy cache remains opt-in and is available only when the host defines its `cache_zone`.
+
+### New Nginx vhost bootstrap
+
+`setup_nginx_vhost.sh` creates an HTTP vhost for a new domain, serves `/.well-known/acme-challenge/` from `/home/<domain>/public_html/`, and proxies other requests to `http://127.0.0.1:8088` by default. Use `--backend off` for a static site. It never overwrites an existing vhost, defaults to dry-run, and keeps certificate issuance separate.
+
+```bash
+./setup_nginx_vhost.sh --domain newsite.example.com
+sudo ./setup_nginx_vhost.sh --domain newsite.example.com --apply
+```
+
+Apply mode runs `nginx -t` before and after enabling the vhost, then reloads Nginx. This server's current Nginx configuration fails the initial `nginx -t` because of dangling site links, so apply mode will refuse to make changes until that is repaired.
+
 ### ACME flags used by `acme_dns_manual_nginx_swap.sh`
 
-The script remains interactive for DNS and safety checkpoints, but accepts `--domain FQDN` and `--mode renew|new` so the batch wrapper can select each domain safely. It drives `acme.sh` using the flags below.
+The script remains interactive for DNS and safety checkpoints, but accepts `--domain FQDN` and `--mode renew|new` so the batch wrapper can select each domain safely. It drives `acme.sh` using the flags below. Configure `ACME_HOME` for the directory containing the certificate state and `ACME_BIN` for a separately located executable. Pass overrides through `sudo env`, for example `sudo env ACME_HOME=/path/to/acme-home ACME_BIN=/path/to/acme.sh ./acme_dns_manual_nginx_swap.sh ...`. This server stores staged vhosts under `/etc/nginx/sites-available/vhost_ssl`. Neither the default ACME executable nor `/root/.acme.sh` is installed yet.
 
 | Flag                                                  | Stage                   | Why it matters                                                                                                     | Typical value                              |
 | ----------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
@@ -141,8 +186,8 @@ The updater discovers domains from the historical source and enabled Nginx sites
 ### 2) Single-domain production renewal
 
 ```bash
-nvm use 22.22.0
-npm install
+nvm use 24.21.0
+npm ci
 npm run check
 sudo ./acme_dns_manual_nginx_swap.sh --domain example.com --mode renew
 ```
@@ -226,19 +271,6 @@ Sequence to follow:
 2. Run strict test to enforce security headers.
 3. Fix missing headers in nginx if strict test fails.
 4. Re-run strict test until all browser projects pass.
-
-### 8) Moodle database availability probe
-
-```bash
-sudo npm run check:moodle-db
-```
-
-Sequence to follow:
-
-1. Read `dbhost`, `dbname`, `dbuser`, and `dbpass` from the live Moodle `config.php`.
-2. Open a short MySQL session against the local MariaDB server.
-3. Run `SELECT 1` plus a quick connection-count status check.
-4. Treat any timeout or auth failure as a real database availability problem, not an SSL issue.
 
 ## Recommended operator workflow
 

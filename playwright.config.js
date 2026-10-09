@@ -4,11 +4,13 @@ require("dotenv").config({ path: path.resolve(__dirname, ".env"), override: true
 
 const BASE_URL = process.env.TARGET_URL || process.env.BASE_URL || "https://example.com"
 const isCI = !!process.env.CI
+const includeFirefox = process.env.PLAYWRIGHT_ENABLE_FIREFOX === "1"
 const includeWebkit = process.env.PLAYWRIGHT_ENABLE_WEBKIT === "1"
 const headless = process.env.HEADLESS !== "false"
 
 module.exports = defineConfig({
   testDir: "./tests",
+  testMatch: "**/ssl-health.spec.js",
   timeout: 45_000,
   expect: {
     timeout: 10_000,
@@ -41,7 +43,9 @@ module.exports = defineConfig({
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"], baseURL: BASE_URL } },
-    { name: "firefox", use: { ...devices["Desktop Firefox"], baseURL: BASE_URL } },
+    ...(includeFirefox
+      ? [{ name: "firefox", use: { ...devices["Desktop Firefox"], baseURL: BASE_URL } }]
+      : []),
     ...(includeWebkit
       ? [{ name: "webkit", use: { ...devices["Desktop Safari"], baseURL: BASE_URL } }]
       : []),

@@ -1,0 +1,15 @@
+default-src 'self' https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club;
+base-uri 'self';
+form-action 'self' https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club https://acb.com.vn https://merchantportal.acb.com.vn;
+frame-ancestors 'self' https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club;
+object-src 'none';
+script-src 'self' blob: 'wasm-unsafe-eval' 'sha256-FGgXjGwGgX7SxhHHlqvUgpBwhYK8n3s8ynTKbWKcPp8=' https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://region1.google-analytics.com https://analytics.google.com;
+style-src 'self' 'unsafe-inline' https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club;
+img-src 'self' data: blob: https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club https://www.google-analytics.com https://*.google-analytics.com https://*.supabase.co;
+font-src 'self' data: https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club;
+connect-src 'self' https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club https://www.google-analytics.com https://*.google-analytics.com https://region1.google-analytics.com https://analytics.google.com https://stats.g.doubleclick.net https://www.googletagmanager.com https://*.supabase.co wss://*.supabase.co https://api.openai.com https://acb.com.vn https://merchantportal.acb.com.vn https://api.icepanel.io;
+media-src 'self' blob: https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club;
+frame-src 'self' blob: https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club https://www.googletagmanager.com https://acb.com.vn https://merchantportal.acb.com.vn;
+worker-src 'self' blob: https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club;
+manifest-src 'self' https://eagles.edu.vn https://*.eagles.edu.vn https://gptpatient.com https://*.gptpatient.com https://eaglesvn.club https://*.eaglesvn.club;
+upgrade-insecure-requests

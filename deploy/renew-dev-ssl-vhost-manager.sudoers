@@ -1,0 +1,1 @@
+eaglesvn ALL=(root) NOPASSWD: /usr/bin/systemctl start renew-dev-ssl-vhost-manager.service

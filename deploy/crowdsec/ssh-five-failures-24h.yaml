@@ -1,0 +1,18 @@
+type: leaky
+name: local/ssh-slow-bruteforce
+description: Detect five SSH authentication failures from one IP within 24 hours
+filter: "evt.Meta.log_type == 'ssh_failed-auth'"
+groupby: evt.Meta.source_ip
+capacity: 5
+leakspeed: 24h
+blackhole: 1m
+reprocess: true
+labels:
+  service: ssh
+  confidence: 3
+  spoofable: 0
+  classification:
+    - attack.T1110
+  behavior: "ssh:bruteforce"
+  label: "SSH brute force"
+  remediation: true

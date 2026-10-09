@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Vhost Manager
+Comment=Start the local root Vhost Manager and open its browser interface
+Exec=/home/eaglesvn/dockerz/renew_ssl/scripts/launch-vhost-manager.sh
+Icon=applications-system
+Terminal=false
+Categories=System;WebDevelopment;
+StartupNotify=true

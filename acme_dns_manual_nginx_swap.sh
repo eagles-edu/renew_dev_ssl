@@ -17,11 +17,12 @@
 set -euo pipefail
 umask 077
 
-# ---------- Config (edit only if your paths differ) ----------
-ACME="/root/.acme.sh/acme.sh"
+# ---------- Config (override ACME paths through the environment) ----------
+ACME_HOME="${ACME_HOME:-/root/.acme.sh}"
+ACME="${ACME_BIN:-${ACME_HOME}/acme.sh}"
 NGINX_ENABLED="/etc/nginx/sites-enabled"
 NGINX_AVAILABLE="/etc/nginx/sites-available"
-SSL_REPO="/etc/nginx/sites-available/ssl_conf_repo"
+SSL_REPO="/etc/nginx/sites-available/vhost_ssl"
 TEMP_DIR="/etc/nginx/temp_production_symlink"
 LOCK_FILE="/run/lock/acme-dns-manual-nginx-swap.lock"
 LOG_DIR="/var/log"
@@ -203,11 +204,6 @@ require_root() {
 require_bin() {
   local b="$1" hint="$2"
   command -v "$b" >/dev/null 2>&1 || die "Required binary missing: '$b'. ${hint}"
-}
-
-require_file_exec() {
-  local f="$1"
-  [ -x "$f" ] || die "Required executable not found or not executable: $f"
 }
 
 # ---------- Domain validation ----------
@@ -622,7 +618,7 @@ Modes:
 
 NEW WORKFLOW INSTRUCTIONS:
   1. Put the staged challenge config at:
-       /etc/nginx/sites-available/ssl_conf_repo/FQDN_ssl.conf
+       /etc/nginx/sites-available/vhost_ssl/FQDN_ssl.conf
   2. Enable it as:
        /etc/nginx/sites-enabled/FQDN_ssl.conf
   3. Put the complete production 80/443 config at:
@@ -638,6 +634,14 @@ Safety:
   The workflow is interactive, serialized by a lock, and stops on failed checks.
   After the SSL staging swap, enter 'r' or 'restore' at any prompt to restore
   the full pre-swap Nginx configuration, reload Nginx, and quit safely.
+
+ACME configuration:
+  Set ACME_HOME to the acme.sh state directory (default: /root/.acme.sh).
+  Set ACME_BIN to the executable path when it is outside ACME_HOME/acme.sh.
+
+CyberPanel-style webroot example on this server:
+  eaglesvn.club -> /home/eaglesvn.club/public_html/
+  This is the Nginx document root; this script still validates with manual DNS.
 USAGE
         return 0
         ;;
@@ -655,7 +659,7 @@ USAGE
   require_bin systemctl "This script expects systemd."
   require_bin dig "Install 'dnsutils' (Ubuntu): apt-get install -y dnsutils"
   require_bin openssl "Install openssl for final verification (optional but recommended)."
-  require_file_exec "$ACME"
+  [ -x "$ACME" ] || die "acme.sh not found or not executable: $ACME (set ACME_HOME or ACME_BIN)."
 
   mkdir -p "$TEMP_DIR" "$LOG_DIR"
 
@@ -668,7 +672,7 @@ USAGE
   fi
   WWW="www.${DOMAIN}"
   RUN_MODE="$(select_run_mode "$mode_arg")"
-  ECC_DIR="/root/.acme.sh/${DOMAIN}_ecc"
+  ECC_DIR="${ACME_HOME}/${DOMAIN}_ecc"
 
   LOG_FILE="${LOG_DIR}/acme-dns-manual-${DOMAIN}-$(date +%F-%H%M%S).log"
   # Start logging AFTER we know the domain for per-domain log filenames.
@@ -1086,7 +1090,7 @@ USAGE
   fi
 
   info "SUCCESS: Completed DNS-manual ECC issue/renew with staging nginx swap and restored production config."
-  info "Backup directories (if kept) live under /root/.acme.sh/${DOMAIN}_ecc.bak.*"
+  info "Backup directories (if kept) live under ${ACME_HOME}/${DOMAIN}_ecc.bak.*"
   info "Log file: $LOG_FILE"
 }
 

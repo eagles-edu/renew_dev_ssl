@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "microsoft/playwright-mcp": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "tools": ["*"]
+    },
+    "io.snyk/mcp": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "snyk@1.1299.1", "mcp", "-t", "stdio"],
+      "tools": ["*"]
+    },
+    "oraios/serena": {
+      "type": "local",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena",
+        "start-mcp-server",
+        "--project",
+        "/home/eaglesvn/dockerz/renew_ssl",
+        "--context",
+        "ide-assistant"
+      ],
+      "tools": ["*"]
+    }
+  }
+}

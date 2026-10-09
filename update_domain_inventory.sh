@@ -97,8 +97,11 @@ read_nginx_domains() {
   local entry domain
   [ -d "$NGINX_ENABLED" ] || return 0
   while IFS= read -r entry; do
-    [[ "$entry" == *.conf ]] || continue
-    domain="${entry%.conf}"
+    case "$entry" in
+      *.conf) domain="${entry%.conf}" ;;
+      *) domain="$entry" ;;
+    esac
+    [[ "$domain" == *_ssl ]] && continue
     [ "${candidates[$domain]:-}" = "new" ] && continue
     add_candidate "$domain" "current"
   done < <(find "$NGINX_ENABLED" -mindepth 1 -maxdepth 1 \( -type f -o -type l \) -printf '%f\n' 2>/dev/null | sort -u)
@@ -266,6 +269,10 @@ main() {
     fi
   } > "$OUTPUT_PATH"
 
+  # Preserve access for the checkout owner when this is run with sudo.
+  if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ && "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then
+    chown "$SUDO_UID:$SUDO_GID" "$OUTPUT_PATH"
+  fi
   chmod 0640 "$OUTPUT_PATH"
   printf 'Updated: %s\n' "$OUTPUT_PATH"
 }

@@ -38,6 +38,7 @@ const ignores = [
   "blob-report/",
   "coverage/",
   "dist/",
+  "vhost-manager/server/public/",
   "build/",
 ]
 

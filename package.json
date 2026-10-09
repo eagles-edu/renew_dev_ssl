@@ -1,5 +1,5 @@
 {
-  "name": "renew_ssl",
+  "name": "renew_dev_ssl",
   "version": "0.0.02.x",
   "private": true,
   "description": "Automation and validation toolkit for manual DNS ACME renewals plus hardened Playwright checks.",
@@ -10,17 +10,22 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
-    "check:moodle-db": "./scripts/moodle-db-healthcheck.sh",
     "test": "playwright test",
     "test:strict": "PLAYWRIGHT_REQUIRE_SECURITY_HEADERS=1 playwright test",
     "test:debug": "PWDEBUG=1 playwright test --ui",
     "test:report": "playwright show-report",
+    "test:vhost": "node --test tests/vhost-manager/*.test.cjs",
+    "test:vhost:ui": "npm run vhost:build && playwright test --config=playwright.vhost.config.js",
+    "check:vhost": "npm run test:vhost && npm run vhost:build && npm run test:vhost:ui",
     "pw:install": "playwright install chromium firefox webkit",
-    "check": "npm run lint && npm run format:check && npm run test",
-    "check:strict": "npm run lint && npm run format:check && npm run test:strict"
+    "vhost:dev": "vite --config vhost-manager/ui/vite.config.mjs",
+    "vhost:build": "vite build --config vhost-manager/ui/vite.config.mjs",
+    "vhost:start": "node vhost-manager/server/index.cjs",
+    "check": "npm run lint && npm run format:check && npm run test && npm run check:vhost",
+    "check:strict": "npm run lint && npm run format:check && npm run test:strict && npm run check:vhost"
   },
   "engines": {
-    "node": ">=22.22.0 <23"
+    "node": ">=24.21.0 <25"
   },
   "repository": {
     "type": "git",
@@ -37,9 +42,16 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.58.2",
+    "@vitejs/plugin-react": "^6.1.2",
     "dotenv": "^17.2.4",
     "eslint": "^10.0.0",
     "globals": "^17.3.0",
-    "prettier": "^3.8.1"
+    "prettier": "^3.8.1",
+    "vite": "^8.3.3"
+  },
+  "dependencies": {
+    "lucide-react": "^1.53.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   }
 }

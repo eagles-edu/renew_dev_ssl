@@ -1,2 +1,9 @@
 .codacy/
 acme_dns_manual_nginx_swap.sh
+.playwright-cli/
+.playwright-mcp/
+/vhost-manager/server/public/
+/tests/fixtures/vhost-manager/var/
+DOMAIN_CERTIFICATE_INVENTORY.md
+# Keep the uppercase doctype and non-self-closing void tags in this HTML entrypoint.
+vhost-manager/ui/index.html

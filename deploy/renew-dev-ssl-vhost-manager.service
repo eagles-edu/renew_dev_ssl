@@ -1,0 +1,15 @@
+[Unit]
+Description=Local root-run Renew Dev SSL Vhost Manager
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/eaglesvn/dockerz/renew_ssl
+ExecStart=/usr/bin/node /home/eaglesvn/dockerz/renew_ssl/vhost-manager/server/index.cjs
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

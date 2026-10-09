@@ -9,6 +9,9 @@ blob-report/
 *.tmp
 .DS_Store
 **/**/.sto
+/vhost-manager/server/public/
+/tests/fixtures/vhost-manager/var/
+.playwright-mcp/
 
 
 #Ignore vscode AI rules

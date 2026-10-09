@@ -90,18 +90,21 @@ _Critically, consistently, and before every coding attempt, ALWAYS reread agents
 ### Detailed App Description
 
 - Baseline: Bash utility `acme_dns_manual_nginx_swap.sh` drives manual DNS ACME renewals with Nginx config swapping, public/authoritative TXT validation, and trap-based rollback.
-- Tooling: Node 20.19.4 runtime (`.nvmrc` / `.node-version`) with ESLint 9 flat config (`eslint.config.mjs`) and Prettier formatting (`.prettierrc`).
+- Vhost bootstrap: `setup_nginx_vhost.sh` previews or creates new HTTP Nginx vhosts, maps `/home/<domain>/public_html/` as the HTTP-01 webroot, and proxies to OpenLiteSpeed at `127.0.0.1:8088` by default. It refuses collisions, validates Nginx before/after activation, and leaves TLS issuance separate.
+- Vhost GUI specification: `docs/gui for data in put.md` defines the local vhost manager inventory, create/edit workflows, file/config templates, drift tracking, validation, and rollback requirements. The GUI is a specification only; it is not implemented yet.
+- Tooling: Node 24.21.0 runtime (`.nvmrc` / `.node-version`) with ESLint 10 flat config (`eslint.config.mjs`) and Prettier formatting (`.prettierrc`).
 - Testing: Playwright harness (`playwright.config.js`, `tests/ssl-health.spec.js`) asserts HTTPS reachability and expected security headers against `TARGET_URL`/`BASE_URL`.
 - Docs/IDE: VS Code settings tuned for Prettier + ESLint; MCP servers configured in `.vscode/mcp.json` (GitHub, Playwright, Codacy, Context7, Serena, Snyk, JFrog) and require tokens/inputs.
 
 ### Standard Operating Procedures (SOP)
 
-- Use Node 20.19.4 via `nvm use` before any npm scripts; `.npmrc` enforces engine-strict.
-- Install deps with `npm install` then `npm run pw:install` to fetch browsers; run `npm run check` for lint+format+tests.
+- Use Node 24.21.0 via `nvm use` before npm scripts; `.npmrc` enforces engine-strict.
+- Install dependencies with `npm ci`; run `npm run pw:install` to fetch browsers and `npm run check` for lint, format, and tests.
+- For GUI work, begin from detected host state without assuming a control panel or imported inventory. Implement read-only discovery and dry-run review before privileged writes; preserve existing files and validate Nginx and OLS before reload.
 - Configure Playwright targets through `TARGET_URL` or `BASE_URL` in `.env`; security-header test skips unless pointing at a non-default host.
 - Keep secrets in `.env` (git-ignored); do not commit node_modules or Playwright artifacts (`playwright-report/`, `test-results/`).
 
 ### Lessons Learned (log)
 
 - Playwright install reports missing system libraries; resolve per installer output or run inside the recommended container image.
-- Use `nvm exec 20.19.4 <command>` when scripting to avoid falling back to the system Node 22.x.
+- Use `nvm exec 24.21.0 <command>` when scripting to avoid falling back to another system Node version.

@@ -3,7 +3,6 @@
 # inventory markdown file. DNS TXT entry and certificate cutover remain
 # interactive and must stay attached to the operator's terminal.
 
-# cd /home/eagles/dockerz/renew_ssl
 # ./renew_all_domains.sh --dry-run
 
 # sudo ./renew_all_domains.sh
@@ -12,7 +11,6 @@
 # sudo ./renew_all_domains.sh --reset-progress
 # sudo ./renew_all_domains.sh --domain ltd.eagles.vn
 
-# cd /home/eagles/dockerz/renew_ssl
 # sudo ./update_domain_inventory.sh
 # ./renew_all_domains.sh --dry-run
 # sudo ./renew_all_domains.sh
