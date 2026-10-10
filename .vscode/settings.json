@@ -18,6 +18,7 @@
   "files.eol": "\n",
   "files.insertFinalNewline": true,
   "files.trimTrailingWhitespace": true,
+  "cssvar.files": ["vhost-manager/ui/src/**/*.css"],
   "npm.packageManager": "npm",
   "prettier.configPath": ".prettierrc",
   "prettier.requireConfig": true,
@@ -27,6 +28,7 @@
     "NVM_DIR": "/home/eagles/.nvm"
   },
   "cSpell.words": [
+    "codacy",
     "dnsutils",
     "gsub",
     "inblk",
@@ -40,6 +42,7 @@
     "SERVFAIL",
     "soa",
     "SOA",
-    "UDP"
+    "UDP",
+    "vhost"
   ]
 }

@@ -293,7 +293,8 @@ main() {
   while IFS= read -r inventory_mode_record; do
     [ -n "$inventory_mode_record" ] || continue
     IFS=$'\t' read -r domain inventory_mode inventory_expiry inventory_status <<<"$inventory_mode_record"
-    if is_due_for_renewal "$inventory_mode" "$inventory_expiry" "$inventory_status"; then
+    if [ -n "$DOMAIN_FILTER" ] && [ "$domain" = "$DOMAIN_FILTER" ] ||
+      is_due_for_renewal "$inventory_mode" "$inventory_expiry" "$inventory_status"; then
       due_records+=("$inventory_mode_record")
     fi
   done < <(parse_inventory)

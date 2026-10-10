@@ -101,14 +101,18 @@ test("validates domain names and derives stable per-site accounts", () => {
   assert.equal(core.validDomain("bad..example.com"), null)
   assert.equal(
     core.accountForDomain("example.com", new Date("2026-10-08T00:00:00Z")),
-    "examexample_com1026"
+    "examcom1026"
   )
   assert.equal(
     core.accountForDomain("sub.example.com", new Date("2026-10-08T00:00:00Z")),
-    "subesub_example_com1026"
+    "subeexample_com1026"
+  )
+  assert.equal(
+    core.accountForDomain("eaglesvn.club", new Date("2026-10-08T00:00:00Z")),
+    "eaglclub1026"
   )
   assert.throws(
-    () => core.accountForDomain("a-very-long-domain-name.example.com"),
+    () => core.accountForDomain("a.example.abcdefghijklmnopqrstuvwxyz0123456789abcdef.com"),
     /32-character limit/
   )
 })

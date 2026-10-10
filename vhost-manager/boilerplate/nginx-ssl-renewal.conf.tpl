@@ -9,6 +9,8 @@ server {
     }
 
     location / {
+{{HTTP_GEOIP_BLOCK}}
+{{HTTP_CACHE_POLICY}}
         proxy_pass http://{{UPSTREAM}};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

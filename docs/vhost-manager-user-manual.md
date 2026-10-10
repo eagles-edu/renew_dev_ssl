@@ -69,6 +69,12 @@ Select **Create new website** (or **Create the first website**) and complete the
 | **Webroot**     | Public document directory                                 | Keep `/home/<domain>/public_html/` unless the application has a clear reason to use another directory under that site's home. |
 | **Notes**       | Optional operator notes                                   | Record purpose, environment, or owner contact; do not put passwords or private keys here.                                     |
 
+### Optional MySQL/MariaDB database
+
+For a new site, enable **Create a MySQL/MariaDB database** and review the database and username. The manager checks that both are unused, creates a `utf8mb4` database, and grants a new `localhost`-only user access only to that database. The manager must be able to authenticate to the local server as root over its Unix socket; it does not accept remote database hosts or existing database credentials.
+
+The manager generates a random password during preview, keeps it only in the expiring server-side plan, and displays it once after successful apply. Save it with your application configuration at that point. It is not written to the site manifest, operation history, diffs, or logs. If site configuration is later rolled back, the database is deliberately preserved so rollback cannot destroy application data.
+
 Each site gets a dedicated no-login Unix account and its own private primary group. The account name is generated from the first four characters of the domain, the full domain slug, and the current month and year (`MMYY`), subject to Linux's 32-character account-name limit. OpenLiteSpeed runs the site's PHP processes as that account. The manager displays the exact account in the review plan. Do not select or reuse the `eaglesvn` account as a site owner.
 
 The dedicated account isolates file ownership and PHP process identity; it does not impose a disk, CPU, or memory quota by itself. The current manager has no quota setting. If you need storage caps, configure and verify Linux filesystem user quotas separately on a filesystem and mount that support them.

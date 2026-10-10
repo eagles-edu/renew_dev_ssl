@@ -52,6 +52,8 @@ server {
         proxy_buffering off;
     }
 
+{{GEOIP_BLOCK}}
+
     error_log {{ERROR_LOG_443}} warn;
     access_log {{ACCESS_LOG_443}};
 }

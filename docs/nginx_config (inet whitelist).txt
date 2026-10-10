@@ -1,0 +1,42 @@
+# Cấu hình Nginx để hiển thị đúng IP thật của khách truy cập
+# =========================================================
+
+# Thêm đoạn sau vào file nginx.conf hoặc file cấu hình website
+# Vị trí: trong khối http { } hoặc server { }
+
+# Dải IP IPv4 của DNS Proxy:
+
+    set_real_ip_from 103.216.118.0/27;
+
+    set_real_ip_from 103.56.163.0/27;
+
+    set_real_ip_from 103.166.183.0/27;
+
+    set_real_ip_from 103.72.98.10;
+
+    set_real_ip_from 103.72.97.5;
+
+    set_real_ip_from 103.72.96.10;
+
+
+# Dải IP IPv6 của DNS Proxy:
+
+    set_real_ip_from 2001:df7:ce00:19::3:0000/112;
+
+    set_real_ip_from 2001:0df7:ce00:16::3:0000/112;
+
+    set_real_ip_from 2001:0df7:ce00:22::3:0000/112;
+
+    set_real_ip_from 2001:df0:1b:3::3:0;
+
+    set_real_ip_from 2001:df0:1b:2::3:0;
+
+    set_real_ip_from 2001:df0:1b:1::3:0;
+
+
+    # Sử dụng header X-Forwarded-For để lấy IP thật
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+# Sau khi chỉnh sửa, chạy lệnh sau để áp dụng:
+# nginx -t && nginx -s reload

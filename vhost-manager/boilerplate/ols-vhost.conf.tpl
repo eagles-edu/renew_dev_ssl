@@ -11,7 +11,7 @@ index {
 
 context / {
   location $DOC_ROOT/
-  allowBrowse 0
+  allowBrowse 1
   rewrite {
     enable 1
     autoLoadHtaccess 1

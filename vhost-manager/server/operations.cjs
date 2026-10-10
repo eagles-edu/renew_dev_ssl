@@ -24,15 +24,28 @@ function ensureRoot(config) {
     throw new Error("Run the manager as root: sudo npm run vhost:start")
 }
 
-function atomicWrite(file, content, { mode, owner, config } = {}) {
+function atomicWrite(file, content, { mode, owner, group = owner, config } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o755 })
   const current = exists(file) ? fs.statSync(file) : null
   const temp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomUUID()}.tmp`)
-  fs.writeFileSync(temp, content, { mode: mode ?? current?.mode ?? 0o640, flag: "wx" })
-  if (current) fs.chownSync(temp, current.uid, current.gid)
-  else if (owner && !config?.testMode) chownNamed(temp, owner, owner === "root" ? owner : owner)
-  fs.renameSync(temp, file)
-  if (mode != null) fs.chmodSync(file, mode)
+  let renamed = false
+  try {
+    fs.writeFileSync(temp, content, { mode: mode ?? current?.mode ?? 0o640, flag: "wx" })
+    if (current) fs.chownSync(temp, current.uid, current.gid)
+    else if (owner && !config?.testMode) chownNamed(temp, owner, group || owner, config)
+    fs.renameSync(temp, file)
+    renamed = true
+    if (mode != null) fs.chmodSync(file, mode)
+  } catch (error) {
+    if (!renamed) {
+      try {
+        fs.rmSync(temp, { force: true })
+      } catch {
+        // Preserve the original write or ownership error.
+      }
+    }
+    throw error
+  }
 }
 
 function userIds(user, group, config) {
@@ -322,6 +335,123 @@ function createSiteAccount(user, home, config) {
   return { created: true }
 }
 
+function databaseSql(sql, config) {
+  return run(
+    config.mysqlBinary || "/usr/bin/mysql",
+    ["--protocol=socket", "--batch", "--skip-column-names"],
+    config,
+    sql
+  )
+}
+
+function databaseErrorText(result, secret = "") {
+  const output = (result.stderr || result.stdout).trim()
+  return secret ? output.replaceAll(secret, "[redacted]") : output
+}
+
+function checkDatabaseAvailable(database, config) {
+  if (!database?.enabled || config.testMode) return
+  const { name, user } = database
+  const result = databaseSql(
+    `SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '${name}';\nSELECT COUNT(*) FROM mysql.user WHERE User = '${user}' AND Host = 'localhost';\n`,
+    config
+  )
+  if (result.status !== 0)
+    throw new Error(
+      `Cannot check local MySQL/MariaDB availability using ${config.mysqlBinary || "/usr/bin/mysql"}: ${(result.stderr || result.stdout).trim() || "root socket authentication failed"}`
+    )
+  const [schemaCount, userCount] = result.stdout.trim().split(/\s+/).map(Number)
+  if (schemaCount > 0) throw new Error(`Database ${name} already exists; choose another name.`)
+  if (userCount > 0)
+    throw new Error(`Database user ${user}@localhost already exists; choose another name.`)
+  if (!Number.isFinite(schemaCount) || !Number.isFinite(userCount))
+    throw new Error("Could not verify that the requested database name and user are available.")
+}
+
+function provisionDatabase(database, password, config) {
+  if (!database?.enabled) return null
+  if (
+    !/^[a-zA-Z0-9_]{1,64}$/.test(database.name) ||
+    !/^[a-zA-Z_][a-zA-Z0-9_]{0,31}$/.test(database.user)
+  )
+    throw new Error("The reviewed database name or user is invalid.")
+  if (!/^[A-Za-z0-9_-]{40,}$/.test(password || ""))
+    throw new Error(
+      "The reviewed plan has no valid generated database password; prepare a new preview."
+    )
+  if (config.testMode)
+    return {
+      created: true,
+      credentials: {
+        database: database.name,
+        username: database.user,
+        host: database.host,
+        password,
+      },
+    }
+
+  let databaseCreated = false
+  let userCreated = false
+  try {
+    const createSchema = databaseSql(
+      `CREATE DATABASE \`${database.name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n`,
+      config
+    )
+    if (createSchema.status !== 0)
+      throw new Error(
+        `Could not create database ${database.name}: ${(createSchema.stderr || createSchema.stdout).trim()}`
+      )
+    databaseCreated = true
+
+    const createUser = databaseSql(
+      `CREATE USER '${database.user}'@'localhost' IDENTIFIED BY '${password}';\n`,
+      config
+    )
+    if (createUser.status !== 0)
+      throw new Error(
+        `Could not create database user ${database.user}@localhost: ${databaseErrorText(createUser, password)}`
+      )
+    userCreated = true
+
+    const grant = databaseSql(
+      `GRANT ALL PRIVILEGES ON \`${database.name}\`.* TO '${database.user}'@'localhost';\n`,
+      config
+    )
+    if (grant.status !== 0)
+      throw new Error(
+        `Could not grant access to database ${database.name}: ${(grant.stderr || grant.stdout).trim()}`
+      )
+  } catch (error) {
+    try {
+      removeProvisionedDatabase(database, config, { databaseCreated, userCreated })
+    } catch (cleanupError) {
+      throw new Error(`${error.message} Cleanup also failed: ${cleanupError.message}`, {
+        cause: cleanupError,
+      })
+    }
+    throw error
+  }
+  return {
+    created: true,
+    credentials: {
+      database: database.name,
+      username: database.user,
+      host: database.host,
+      password,
+    },
+  }
+}
+
+function removeProvisionedDatabase(database, config, { databaseCreated, userCreated }) {
+  if (config.testMode || (!databaseCreated && !userCreated)) return
+  const statements = []
+  if (userCreated) statements.push(`DROP USER IF EXISTS '${database.user}'@'localhost';`)
+  if (databaseCreated) statements.push(`DROP DATABASE IF EXISTS \`${database.name}\`;`)
+  const result = databaseSql(`${statements.join("\n")}\n`, config)
+  if (result.status !== 0)
+    throw new Error((result.stderr || result.stdout).trim() || "MySQL/MariaDB cleanup failed.")
+}
+
 function writeSiteFile(file, config) {
   if (file.action === "remove") {
     fs.rmSync(file.path, { force: true })
@@ -332,7 +462,12 @@ function writeSiteFile(file, config) {
     fs.symlinkSync(file.target, file.path)
     return
   }
-  atomicWrite(file.path, file.content, { mode: file.mode, owner: file.owner, config })
+  atomicWrite(file.path, file.content, {
+    mode: file.mode,
+    owner: file.owner,
+    group: file.group || file.owner,
+    config,
+  })
   if (file.owner && !config.testMode)
     chownNamed(file.path, file.owner, file.group || file.owner, config)
 }
@@ -462,6 +597,7 @@ function archiveExamples(plan, config) {
 function applySite(plan, config) {
   ensureRoot(config)
   assertTargetsUnchanged(plan)
+  checkDatabaseAvailable(plan.database, config)
   const { domain, webroot, account, group, directoryMode, requestMode } = plan.settings
   const home = path.join(config.homeRoot, domain)
   const privateDir = path.join(home, ".site-config")
@@ -475,6 +611,7 @@ function applySite(plan, config) {
   )
   const accountResult = createSiteAccount(account, home, config)
   const changedPaths = []
+  let databaseResult = null
   try {
     if (!isUpdate) {
       mkdirOwned(home, 0o711, "root", "root", config)
@@ -483,6 +620,8 @@ function applySite(plan, config) {
     if (requestMode === "ols") {
       mkdirOwned(privateDir, 0o700, account, group || account, config)
       mkdirOwned(path.join(config.olsVhosts, domain), 0o750, "lsadm", "nogroup", config)
+      if (plan.directories?.some((directory) => directory.path === config.olsLogDir))
+        mkdirOwned(config.olsLogDir, 0o750, "root", "nogroup", config)
     }
     for (const file of plan.files) {
       if (file.path === config.olsMain) {
@@ -503,6 +642,7 @@ function applySite(plan, config) {
       reconcileFirewall(domain, firewallPrevious, plan.firewall.ports, config)
     reloadService("nginx", config)
     reloadService("lshttpd", config)
+    databaseResult = provisionDatabase(plan.database, plan.databasePassword, config)
     const manifestEntry = {
       domain,
       aliases: plan.settings.aliases,
@@ -551,6 +691,9 @@ function applySite(plan, config) {
       previousSite,
       accountCreated: accountResult.created,
       account,
+      database: plan.database?.enabled
+        ? { name: plan.database.name, user: plan.database.user, host: plan.database.host }
+        : null,
       firewallPrevious,
       firewallCurrent: plan.firewall?.ports || { tcp: [], udp: [] },
       rollbackAvailable: true,
@@ -560,8 +703,22 @@ function applySite(plan, config) {
       manifest.sites[domain] = manifestEntry
       manifest.operations = [operation, ...(manifest.operations || [])].slice(0, 100)
     })
-    return { operation, checks }
+    return {
+      operation,
+      checks,
+      ...(databaseResult ? { databaseCredentials: databaseResult.credentials } : {}),
+    }
   } catch (error) {
+    if (databaseResult?.created) {
+      try {
+        removeProvisionedDatabase(plan.database, config, {
+          databaseCreated: true,
+          userCreated: true,
+        })
+      } catch (cleanupError) {
+        error.message = `${error.message} Database cleanup also failed: ${cleanupError.message}`
+      }
+    }
     restoreAndReload(
       snapshot,
       config,
@@ -577,7 +734,10 @@ function applySite(plan, config) {
         : undefined
     )
     if (!isUpdate) {
-      for (const dir of [path.join(config.olsVhosts, domain), privateDir, webroot, home]) {
+      const cleanupDirectories = [path.join(config.olsVhosts, domain), privateDir, webroot, home]
+      if (plan.directories?.some((directory) => directory.path === config.olsLogDir))
+        cleanupDirectories.unshift(config.olsLogDir)
+      for (const dir of cleanupDirectories) {
         try {
           fs.rmdirSync(dir)
         } catch (error) {

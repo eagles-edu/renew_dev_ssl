@@ -61,6 +61,64 @@ test("dashboard opens create flow, previews files, and cancels without changes",
   await expect(page.getByRole("option", { name: /phpmyadmin/ })).toBeVisible()
 })
 
+test("all create actions open the inline form with dark mode and optional database", async ({
+  page,
+}) => {
+  await page.goto("/")
+
+  const openAndCancel = async (button) => {
+    await button.click()
+    await expect(page.locator(".create-panel")).toBeVisible()
+    await expect(page.locator(".modal-backdrop")).toHaveCount(0)
+    await page.getByRole("button", { name: "Cancel", exact: true }).click()
+  }
+
+  const createWebsiteButtons = page.getByRole("button", {
+    name: "Create new website",
+    exact: true,
+  })
+  const createWebsiteButtonCount = await createWebsiteButtons.count()
+  for (let index = 0; index < createWebsiteButtonCount; index += 1) {
+    const button = createWebsiteButtons.nth(index)
+    if (await button.isVisible()) await openAndCancel(button)
+  }
+
+  const newSiteButton = page.getByRole("button", { name: "New site", exact: true })
+  if (await newSiteButton.isVisible()) await openAndCancel(newSiteButton)
+
+  const firstWebsiteButton = page.getByRole("button", {
+    name: "Create the first website",
+    exact: true,
+  })
+  if (await firstWebsiteButton.isVisible()) await openAndCancel(firstWebsiteButton)
+
+  await page.getByRole("button", { name: "Help", exact: true }).click()
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create new website", exact: true })
+    .click()
+
+  const createPanel = page.locator(".create-panel")
+  await expect(createPanel).toBeVisible()
+  await expect(createPanel.locator(".theme-toggle")).toHaveCount(0)
+  const [panelWidth, slotWidth] = await Promise.all([
+    createPanel.evaluate((element) => element.getBoundingClientRect().width),
+    page.locator(".create-form-slot").evaluate((element) => element.getBoundingClientRect().width),
+  ])
+  expect(panelWidth).toBeCloseTo(slotWidth, 0)
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark")
+  await expect(createPanel).toHaveCSS("background-color", "rgb(38, 38, 38)")
+  await expect(createPanel).toHaveCSS("filter", "none")
+  await expect(page.locator(".app-shell")).toHaveCSS("filter", "none")
+  await page.getByRole("button", { name: "Dark mode, switch to light mode" }).click()
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light")
+  await expect(createPanel).toHaveCSS("background-color", "rgb(255, 255, 255)")
+  await expect(createPanel).toHaveCSS("filter", "none")
+  await page.getByRole("button", { name: "Light mode, switch to dark mode" }).click()
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark")
+  await expect(createPanel).toHaveCSS("background-color", "rgb(38, 38, 38)")
+})
+
 test("reset preview names phpMyAdmin resources that will be preserved", async ({ page }) => {
   await page.goto("/")
   await page.getByRole("button", { name: "Preview clean initialization" }).click()

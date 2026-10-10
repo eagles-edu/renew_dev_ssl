@@ -59,15 +59,47 @@ function nextVersion(commits) {
 function promptWithPrefill(suggestedMessage) {
   return new Promise((resolve, reject) => {
     const prompt = readline.createInterface({ input: stdin, output: stdout })
-    prompt.question("Commit message (edit, Enter accepts): ", (answer) => {
-      prompt.close()
-      resolve(answer.trim() || suggestedMessage)
-    })
-    prompt.write(suggestedMessage)
+
     prompt.once("SIGINT", () => {
       prompt.close()
       reject(new Error("Commit cancelled."))
     })
+
+    prompt.question(
+      "Commit message (edit the version or add ' - description'; Enter accepts; shell commands run before this prompt): ",
+      (answer) => {
+        const message = answer.trim() || suggestedMessage
+        const prefix = suggestedMessage.replace(/\d+(?:\.\d+){3}$/, "")
+        const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        const allowedMessage = new RegExp(`^${escapedPrefix}\\d+(?:\\.\\d+){3}(?: - .+)?$`)
+
+        prompt.close()
+        if (!allowedMessage.test(message)) {
+          reject(
+            new Error(
+              `Invalid commit message. Use '${suggestedMessage}' or the same prefix with a four-part version, optionally followed by ' - description'. Run shell commands before starting git:update.`
+            )
+          )
+          return
+        }
+
+        resolve(message)
+      }
+    )
+    prompt.write(suggestedMessage)
+  })
+}
+
+function confirmPublish(message) {
+  return new Promise((resolve) => {
+    const prompt = readline.createInterface({ input: stdin, output: stdout })
+    prompt.question(
+      `\nCommit message: ${message}\nThis will run npm run check, stage all changes, commit, and push to origin. Continue? [y/N] `,
+      (answer) => {
+        prompt.close()
+        resolve(/^(y|yes)$/i.test(answer.trim()))
+      }
+    )
   })
 }
 
@@ -85,6 +117,11 @@ async function main() {
   }
 
   const message = await promptWithPrefill(suggestedMessage)
+  if (!(await confirmPublish(message))) {
+    stdout.write("Cancelled; no checks or Git changes were made.\n")
+    return
+  }
+
   runCommand("npm", ["run", "check"])
   runGit(["add", "."])
   runGit(["commit", "-m", message])

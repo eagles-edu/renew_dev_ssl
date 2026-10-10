@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Provide a host-local GUI for creating, reviewing, and maintaining websites on this Nginx + OpenLiteSpeed server. The GUI must make the selected domain and every file/system change visible before it applies anything. It manages web-server configuration and webroot files; DNS ownership, ACME issuance, database provisioning, and application deployment remain separate operations unless explicitly added later.
+Provide a host-local GUI for creating, reviewing, and maintaining websites on this Nginx + OpenLiteSpeed server. The GUI must make the selected domain and every file/system change visible before it applies anything. It manages web-server configuration and webroot files, with optional local MySQL/MariaDB database and scoped-user creation. DNS ownership, ACME issuance, and application deployment remain separate operations.
 
 Start with a clean configuration model: do not assume a hosting panel, imported domain inventory, prior ownership conventions, or a particular site's settings. Detect the actual installed services and paths, then let the operator configure the initial site defaults. Existing configs are reference examples unless the operator explicitly directs cleanup. For a clean initialization, show the exact targets and diffs, save exact copies in a root-only archive before clearing active paths, preserve phpMyAdmin, and require the reviewed confirmation phrase before apply.
 
@@ -30,7 +30,7 @@ Start with a clean configuration model: do not assume a hosting panel, imported 
 Use named sections with a reviewable summary:
 
 1. **Identity**: required primary FQDN; optional `www` alias and additional aliases; optional label/notes. Normalize case and reject invalid labels, duplicates, wildcard names unless explicitly supported, and conflicts with existing configs.
-2. **Webroot and files**: default `/home/<domain>/public_html/`; require a dedicated no-login Unix account with a private primary group, derived as `<first4letters><full-domain-slug><MMYY>` (for example, `examexample_com1026`), and stable when that managed site is edited later. Run the site's OLS PHP processes as that account. Do not allow a shared system account/group to own a managed site's content. Show the account and group in the review. Keep directory/file permission presets explicit; include placeholder index, robots.txt, and optional OLS `.htaccess` controls.
+2. **Webroot and files**: default `/home/<domain>/public_html/`; require a dedicated no-login Unix account with a private primary group, derived as `<first4letters><domain-suffix-labels><MMYY>` (for example, `eaglesvn.club` becomes `eaglclub1026`), and stable when that managed site is edited later. Run the site's OLS PHP processes as that account. Do not allow a shared system account/group to own a managed site's content. Show the account and group in the review. Keep directory/file permission presets explicit; include placeholder index, robots.txt, and optional OLS `.htaccess` controls.
 3. **Request handling**: choose static Nginx, Nginx reverse proxy to OLS, or OLS-managed application. For reverse proxy, accept only configured local upstreams by default and show the resulting proxy headers. Never treat `.htaccess` as an Nginx control: show that it is relevant only when the request is served by a compatible OLS/Apache rewrite context.
 4. **Nginx**: HTTP server names, webroot, ACME HTTP-01 challenge location, access/error log paths, optional redirect policy, and selected full-site template. Offer a separate SSL/renewal config template only after certificate paths and renewal method are known. Generated configs must not point at missing certificate files.
 5. **Security policy**: let each site use the manager-wide global CSP baseline or a custom site policy. The baseline includes the `eagles.edu.vn`, `gptpatient.com`, `eaglesvn.club`, and `eaglesvn.com` domain families and the client-side vendors present in current/reference app and Nginx configs: Google Analytics/Tag Manager/Fonts/Translate APIs, Brevo, jsDelivr, unpkg, AMP, YouTube, hCaptcha, and the GPTpatient placeholder image host. Use explicit source directives, `object-src 'none'`, a hash for the existing inline Analytics bootstrap, and no general inline-script or `unsafe-eval` allowance. Start in report-only mode and keep custom values in the reviewable plan.
@@ -44,6 +44,7 @@ Allow editing supported fields for GUI-managed sites. For files created outside 
 
 1. **Create New Website** opens a guided form beginning with the domain name. Validate each field inline and explain conflicts with the exact discovered path.
 2. Build a dry-run plan. Show domains, webroot, owner/group, modes, generated placeholder/robots/`.htaccess` choices, Nginx and OLS output paths, PHP profile, and any prerequisites.
+   - Database creation is opt-in. Review the database name, localhost-only user, required local root socket access, and one-time generated password delivery. Never include the password in the plan response, manifest, history, or logs; preserve an explicitly created database when rolling back site files.
 3. Preview the generated files and full diff. Let the operator download/export the plan without applying it.
 4. Apply as a sequence of individually logged steps: create directories/files; set ownership/modes; write Nginx/OLS/PHP configs using atomic temporary files and backups; create the enabled Nginx symlink; validate each service configuration; then reload only services whose config passed validation.
 5. On a failed step, stop, report the exact command/result, and roll back only changes made by this operation. Never remove pre-existing or externally modified files during rollback.
@@ -62,7 +63,8 @@ Allow editing supported fields for GUI-managed sites. For files created outside 
 - Use least-privilege ownership: the site/deploy account owns content; the web-server account receives only the read/traverse access required. Do not default to `777` or make all sites owned by the web-server user.
 - Separate writable upload/cache paths from executable application files where the application supports it. Display effective Unix modes and ACLs instead of hiding them behind labels such as “secure”.
 - Use atomic writes, restrictive temporary-file modes, collision checks, per-domain locks, validated path construction, and backups before changing active configuration.
-- Keep secrets and TLS private keys out of the webroot, GUI state, logs, diffs, and browser responses.
+- Keep secrets and TLS private keys out of the webroot, persisted GUI state, logs, and diffs. The only database-secret response is the one-time credential handoff after explicit provisioning.
+- Keep generated database passwords only in the expiring server-side plan and the one-time post-apply response; grant the new localhost-only user access only to its selected database.
 - Disable directory listings and prevent dotfile/private-file exposure in the selected server template. Use an explicit `robots.txt` choice and make clear that it is crawler guidance, not access control.
 - Only add security headers or HTTP-to-HTTPS redirects when the selected TLS setup is ready and the operator previews the result; avoid proxy loops and duplicate headers across Nginx and OLS.
 - Validate Nginx with its effective global configuration before reload. Validate OLS with the installed binary/config before reload. A successful syntax test does not by itself prove DNS, routing, PHP execution, or public TLS health.
@@ -78,6 +80,7 @@ Allow editing supported fields for GUI-managed sites. For files created outside 
 
 - A user can create a site by entering a domain, inspect the complete plan, and cancel without changing the host.
 - The sidebar displays enabled and disabled discovered vhosts and identifies broken links, invalid configs, and external changes.
+- A site can be created without a database or with an explicitly reviewed MySQL/MariaDB database and scoped localhost-only user; generated credentials are shown once after apply.
 - A managed site's editable details persist after reload and produce a diff before apply.
 - Webroot, placeholder page, ownership, permissions, robots.txt, optional `.htaccess`, Nginx HTTP/SSL-renewal templates, enabled symlink, OLS vhost, selected PHP profile, prefilled simple PHP settings, and advanced per-site ini overrides each have explicit preview and validation states.
 - Apply refuses collisions, unsafe paths, missing prerequisites, and failed global syntax checks; successful apply records exactly what changed and can roll back its own changes.

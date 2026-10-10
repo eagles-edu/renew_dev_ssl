@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 SOURCE_PATH="${SCRIPT_DIR}/Main_Domain KeyLength SAN_Domains CA Cre.md"
 OUTPUT_PATH="${SCRIPT_DIR}/DOMAIN_CERTIFICATE_INVENTORY.md"
 NGINX_ENABLED="/etc/nginx/sites-enabled"
+ADD_NEW_DOMAIN=""
 TMP_DIR=""
 
 die() {
@@ -30,6 +31,7 @@ Options:
   --source FILE       Historical/source inventory markdown
   --output FILE       Generated clean inventory markdown
   --nginx-dir DIR     Nginx sites-enabled directory
+  --add-new FQDN      Include a new manager-created site even when only its *_ssl link is enabled
   --help              Show this help
 
 Normal operation:
@@ -54,6 +56,13 @@ parse_args() {
       --nginx-dir)
         [ "$#" -ge 2 ] || die "Missing value for --nginx-dir"
         NGINX_ENABLED="$2"
+        shift 2
+        ;;
+      --add-new)
+        [ "$#" -ge 2 ] || die "Missing value for --add-new"
+        ADD_NEW_DOMAIN="${2,,}"
+        [[ "$ADD_NEW_DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]] ||
+          die "Invalid domain for --add-new: $2"
         shift 2
         ;;
       --help|-h)
@@ -111,8 +120,10 @@ promote_issued_domains() {
   local domain cert_file
   for domain in "${!candidates[@]}"; do
     [ "${candidates[$domain]}" = "new" ] || continue
+    [ "$domain" = "$ADD_NEW_DOMAIN" ] && continue
     cert_file="$TMP_DIR/${domain}.classification.pem"
-    if fetch_certificate "$domain" "$cert_file"; then
+    if fetch_certificate "$domain" "$cert_file" &&
+      certificate_covers_domain "$cert_file" "$domain"; then
       candidates["$domain"]="current"
     fi
   done
@@ -235,6 +246,9 @@ main() {
   declare -a current_domains=() new_domains=()
   read_source_inventory
   read_nginx_domains
+  if [ -n "$ADD_NEW_DOMAIN" ]; then
+    candidates["$ADD_NEW_DOMAIN"]="new"
+  fi
   promote_issued_domains
   [ "${#candidates[@]}" -gt 0 ] || die "No domains found in source or Nginx inventory."
 

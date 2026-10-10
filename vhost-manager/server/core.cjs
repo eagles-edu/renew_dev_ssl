@@ -30,6 +30,7 @@ const DEFAULTS = Object.freeze({
   phpIni: "/usr/local/lsws/lsphp83/etc/php/8.3/litespeed/php.ini",
   phpIniScanDir: "/usr/local/lsws/lsphp83/etc/php/8.3/mods-available",
   phpBinary: "/usr/local/lsws/lsphp83/bin/lsphp",
+  olsLogDir: "/var/log/openlitespeed",
   acmeHome: "/root/.acme.sh",
   stateDir: "/var/lib/renew-dev-ssl-vhost-manager",
   backupDir: "/var/backups/renew-dev-ssl-vhost-manager",
@@ -42,6 +43,7 @@ const DEFAULTS = Object.freeze({
   crowdsecCli: "/usr/bin/cscli",
   crowdsecService: "crowdsec",
   crowdsecBouncerService: "crowdsec-firewall-bouncer",
+  mysqlBinary: "/usr/bin/mysql",
   homeRoot: "/home",
   nginxBinary: "/usr/sbin/nginx",
   olsBinary: "/usr/local/lsws/bin/openlitespeed",
@@ -60,6 +62,7 @@ function configFromEnv(env = process.env) {
       nginxConfD: path.join(root, "etc/nginx/conf.d"),
       mimeTypesFile: path.join(root, "etc/nginx/mime.types"),
       olsRoot: path.join(root, "usr/local/lsws"),
+      olsLogDir: path.join(root, "var/log/openlitespeed"),
       olsMain: path.join(root, "usr/local/lsws/conf/httpd_config.conf"),
       olsVhosts: path.join(root, "usr/local/lsws/conf/vhosts"),
       phpIni: path.join(root, "usr/local/lsws/lsphp83/etc/php.ini"),
@@ -77,13 +80,18 @@ function configFromEnv(env = process.env) {
       crowdsecCli: "/usr/bin/cscli",
       crowdsecService: "crowdsec",
       crowdsecBouncerService: "crowdsec-firewall-bouncer",
+      mysqlBinary: env.VHOST_MANAGER_MYSQL_BINARY || DEFAULTS.mysqlBinary,
       homeRoot: path.join(root, "home"),
       nginxBinary: "/bin/true",
       olsBinary: "/bin/true",
       testMode: true,
     }
   }
-  return { ...DEFAULTS, testMode: false }
+  return {
+    ...DEFAULTS,
+    mysqlBinary: env.VHOST_MANAGER_MYSQL_BINARY || DEFAULTS.mysqlBinary,
+    testMode: false,
+  }
 }
 
 function readText(file) {
@@ -92,6 +100,29 @@ function readText(file) {
   } catch (error) {
     if (error.code === "ENOENT" || error.code === "EACCES") return null
     throw error
+  }
+}
+
+function certificateStatus(config, domain, settings = {}) {
+  const certPath = String(
+    settings.certificatePath || `${config.acmeHome}/${domain}_ecc/fullchain.cer`
+  )
+  if (
+    !certPath.startsWith(`${config.acmeHome}/`) ||
+    !path.resolve(certPath).startsWith(`${path.resolve(config.acmeHome)}${path.sep}`)
+  )
+    return { ready: false, expiresAt: null }
+  try {
+    const certificate = new crypto.X509Certificate(fs.readFileSync(certPath))
+    const expiresAt = Date.parse(certificate.validTo)
+    const validFrom = Date.parse(certificate.validFrom)
+    const now = Date.now()
+    return {
+      ready: Boolean(certificate.checkHost(domain)) && validFrom <= now && expiresAt > now,
+      expiresAt: Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : null,
+    }
+  } catch {
+    return { ready: false, expiresAt: null }
   }
 }
 
@@ -269,7 +300,11 @@ function updatePersistentFirewall(source, domain, nextPorts, protocol) {
 function accountForDomain(domain, createdAt = new Date()) {
   const normalized = String(domain).toLowerCase()
   const prefix = normalized.replace(/[^a-z]/g, "").slice(0, 4)
-  const domainSlug = normalized.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+  const domainSlug = normalized
+    .split(".")
+    .slice(1)
+    .join("_")
+    .replace(/[^a-z0-9_]/g, "")
   const date = createdAt instanceof Date ? createdAt : new Date(createdAt)
   const monthYear = `${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getFullYear()).slice(-2)}`
   const account = `${prefix}${domainSlug}${monthYear}`
@@ -451,6 +486,8 @@ function inventory(config, manifest = {}) {
     site.managed = Boolean(manifest.sites?.[site.id])
     site.adoptedReadOnly = Boolean(manifest.sites?.[site.id]?.adoptedReadOnly)
     site.managerSettings = manifest.sites?.[site.id]?.settings || null
+    site.tls = certificateStatus(config, site.domain, site.managerSettings || {})
+    site.tlsReady = site.tls.ready
     site.webroot =
       manifest.sites?.[site.id]?.webroot ||
       site.olsVhosts.map((vhost) => vhost.docRoot).find(Boolean) ||
@@ -545,7 +582,13 @@ function depsInNginx(config) {
   const text = inputs.map((file) => readText(file) || "").join("\n")
   return {
     badBot: /\bmap\s+[^;{]*\$bad_bot\b/.test(text),
-    cacheZone: /\bproxy_cache_path\b[^;]*\bkeys_zone\s*=\s*cache_zone\b/.test(text),
+    geoip: /geoip-country-map\.conf|\bmap\s+\$geoip2_data_country_code\s+\$block_country\b/.test(
+      text
+    ),
+    cacheZone:
+      /\bproxy_cache_path\b[^;]*\bkeys_zone\s*=\s*cache_zone\b|cache-proxy-zone-active\.conf/.test(
+        text
+      ),
     apiLimit: /\blimit_req_zone\b[^;]*\bzone\s*=\s*api_limit\b/.test(text),
   }
 }
@@ -606,6 +649,7 @@ function managerOptions(config) {
       phpIniScanDir: config.phpIniScanDir,
       acmeHome: config.acmeHome,
       homeRoot: config.homeRoot,
+      mysqlBinary: config.mysqlBinary,
       template: "Vhost Manager boilerplates",
     },
     users: namesFrom("/etc/passwd", 1000),
@@ -748,20 +792,38 @@ function renderFromEaglesvn(domain, aliases, webroot, cert, key, config, options
     .trim()
   if (!/^[a-zA-Z0-9=(),;\s*.-]+$/.test(permissions) || permissions.length > 500)
     throw new Error("Permissions Policy contains unsupported characters or is too long.")
-  const security = `${hsts}    add_header X-Content-Type-Options nosniff always;\n    add_header X-Frame-Options ${frame} always;\n    add_header Referrer-Policy "${referrer}" always;\n    add_header Permissions-Policy "${permissions}" always;`
-  const securityHeaders = `    # Security Headers\n${security}${cspHeader ? `\n    add_header ${cspHeader} "${policy}" always;` : ""}`
+  const defaultPermissions = "geolocation=(), microphone=(), camera=()"
+  const useSecuritySnippet =
+    !config.testMode &&
+    exists("/etc/nginx/snippets/security-headers.conf") &&
+    frame === "SAMEORIGIN" &&
+    referrer === "strict-origin" &&
+    permissions === defaultPermissions
+  const security = `    add_header X-Content-Type-Options nosniff always;\n    add_header X-Frame-Options ${frame} always;\n    add_header Referrer-Policy "${referrer}" always;\n    add_header Permissions-Policy "${permissions}" always;`
+  const securityBase = useSecuritySnippet
+    ? "    include /etc/nginx/snippets/security-headers.conf;"
+    : security
+  const securityHeaders = `    # Security Headers\n${securityBase}${hsts ? `\n${hsts.trimEnd()}` : ""}${cspHeader ? `\n    add_header ${cspHeader} "${policy}" always;` : ""}`
   const mimeTypes = options.mimeOverrides?.length
     ? `    # Site MIME mappings merged with the host mime.types file.\n    types {\n${readMimeTypes(config, options.mimeOverrides)}\n    }`
     : ""
   const duration =
     options.staticCache === "30d" ? "30d" : options.staticCache === "1h" ? "1h" : "5m"
-  const staticCache =
-    options.staticCache && options.staticCache !== "off"
-      ? `    # Browser cache for static assets; dynamic responses remain uncached.\n    location ~* \\.(?:css|js|mjs|png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf)$ {\n        expires ${duration};\n        proxy_pass http://${options.upstream || "127.0.0.1:8088"};\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_buffering on;\n    }`
+  const developmentCache =
+    options.staticCache === "dev" ? "    include /etc/nginx/snippets/cache-policy-dev.conf;" : ""
+  const developmentHttpCache =
+    options.staticCache === "dev"
+      ? "        include /etc/nginx/snippets/cache-policy-dev.conf;\n"
       : ""
+  const staticCache =
+    options.staticCache === "dev"
+      ? developmentCache
+      : options.staticCache && options.staticCache !== "off"
+        ? `    # Browser cache for static assets; dynamic responses remain uncached.\n    location ~* \\.(?:css|js|mjs|png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf)$ {\n        expires ${duration};\n        proxy_pass http://${options.upstream || "127.0.0.1:8088"};\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_buffering on;\n    }`
+        : ""
   const proxyCache =
-    deps.cacheZone && options.proxyCache
-      ? `        proxy_cache cache_zone;\n        proxy_cache_key "$scheme$request_method$host$request_uri$is_args$args";\n        proxy_cache_valid 200 10m;\n        proxy_cache_use_stale error timeout updating;\n        proxy_cache_bypass $http_cache_control $http_authorization $http_cookie;\n        proxy_no_cache $http_cache_control $http_authorization $http_cookie;`
+    deps.cacheZone && options.proxyCache && options.staticCache !== "dev"
+      ? `        proxy_cache cache_zone;\n        proxy_cache_key "$scheme$request_method$host$request_uri$is_args$args";\n        proxy_cache_methods GET HEAD;\n        proxy_cache_valid 200 10m;\n        proxy_cache_use_stale error timeout updating;\n        proxy_cache_bypass $http_cache_control $http_authorization $http_cookie $query_string;\n        proxy_no_cache $http_cache_control $http_authorization $http_cookie $query_string $upstream_http_set_cookie;`
       : ""
   const rateLimit = deps.apiLimit
     ? "        limit_req zone=api_limit burst=40 nodelay;\n        limit_req_status 429;"
@@ -769,10 +831,13 @@ function renderFromEaglesvn(domain, aliases, webroot, cert, key, config, options
   const badBot = deps.badBot
     ? '    if ($bad_bot = 1) {\n        return 403 "Forbidden: Malicious bot detected.";\n    }'
     : ""
+  const geoipBlock = deps.geoip
+    ? "        include /etc/nginx/snippets/geoip-country-block.conf;\n"
+    : ""
   const httpRedirect =
     options.httpRedirect === false
       ? ""
-      : "    location / {\n        return 301 https://$host$request_uri;\n    }"
+      : `    location / {\n${geoipBlock}        return 301 https://$host$request_uri;\n    }`
   const variables = {
     SERVER_NAMES: names,
     WEBROOT: `${webroot.replace(/\/$/, "")}/`,
@@ -785,6 +850,8 @@ function renderFromEaglesvn(domain, aliases, webroot, cert, key, config, options
     MIME_TYPES: mimeTypes,
     STATIC_CACHE: staticCache,
     BAD_BOT_BLOCK: badBot,
+    GEOIP_BLOCK: geoipBlock.trimEnd(),
+    HTTP_GEOIP_BLOCK: geoipBlock,
     UPSTREAM: options.upstream || "127.0.0.1:8088",
     PROXY_CACHE: proxyCache,
     RATE_LIMIT: rateLimit,
@@ -797,6 +864,8 @@ function renderFromEaglesvn(domain, aliases, webroot, cert, key, config, options
     {
       SERVER_NAMES: names,
       WEBROOT: `${webroot.replace(/\/$/, "")}/`,
+      HTTP_GEOIP_BLOCK: geoipBlock,
+      HTTP_CACHE_POLICY: developmentHttpCache,
       UPSTREAM: "127.0.0.1:8088",
       RENEWAL_ERROR_LOG: options.nginxErrorLog || `/var/log/nginx/${stem}_renewal_error.log`,
       RENEWAL_ACCESS_LOG: options.nginxAccessLog || `/var/log/nginx/${stem}_renewal_access.log`,
@@ -881,8 +950,8 @@ function renderOlsVhost(
       WEBROOT: webroot.replace(/\/$/, ""),
       DOMAIN: domain,
       ALIASES: aliases.join(" "),
-      OLS_ERROR_LOG: `/var/log/openlitespeed/${domain}_error.log`,
-      OLS_ACCESS_LOG: `/var/log/openlitespeed/${domain}_access.log`,
+      OLS_ERROR_LOG: path.join(config.olsLogDir || DEFAULTS.olsLogDir, `${domain}_error.log`),
+      OLS_ACCESS_LOG: path.join(config.olsLogDir || DEFAULTS.olsLogDir, `${domain}_access.log`),
       PHP_HANDLER: handler,
       PHP_SOCKET: socket,
       PHP_INI: phpIni,
@@ -1023,6 +1092,7 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
     throw new Error("Every alias must be a valid fully qualified domain name.")
   const aliases = [...new Set(parsedAliases.filter((name) => name !== domain))]
   const homeRoot = config.homeRoot || "/home"
+  const olsLogDir = config.olsLogDir || DEFAULTS.olsLogDir
   const webroot = path.resolve(
     String(input.webroot || path.join(homeRoot, domain, "public_html")).trim()
   )
@@ -1030,6 +1100,20 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
   if (!webroot.startsWith(`${siteHome}${path.sep}`))
     throw new Error(`Webroot must remain inside ${siteHome}.`)
   const managedSite = manifest.sites?.[domain] || null
+  const databaseEnabled = input.createDatabase === true
+  let database = { enabled: false }
+  if (databaseEnabled) {
+    if (managedSite) throw new Error("Database creation is available when creating a new site.")
+    const name = String(input.databaseName || "").trim()
+    const user = String(input.databaseUser || "").trim()
+    if (!/^[a-zA-Z0-9_]{1,64}$/.test(name))
+      throw new Error("Database name must be 1–64 letters, numbers, or underscores.")
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,31}$/.test(user))
+      throw new Error(
+        "Database user must be 1–32 letters, numbers, or underscores and start with a letter or underscore."
+      )
+    database = { enabled: true, name, user, host: "localhost", engine: "MySQL/MariaDB" }
+  }
   const oldFirewallPorts = managedSite?.settings?.firewallPorts || { tcp: [], udp: [] }
   const firewallPorts = {
     tcp: parseFirewallPorts(input.tcpPorts ?? oldFirewallPorts.tcp, "tcp"),
@@ -1173,8 +1257,10 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
       : String(input.mimeOverrides || "")
           .split(/\r?\n/)
           .filter(Boolean),
-    staticCache: ["off", "5m", "1h", "30d"].includes(input.staticCache) ? input.staticCache : "1h",
-    proxyCache: Boolean(input.proxyCache),
+    staticCache: ["off", "dev", "5m", "1h", "30d"].includes(input.staticCache)
+      ? input.staticCache
+      : "1h",
+    proxyCache: Boolean(input.proxyCache) && input.staticCache !== "dev",
   }
   if (security.mimeOverrides.length && !exists(config.mimeTypesFile))
     throw new Error(`System MIME types file is missing: ${config.mimeTypesFile}`)
@@ -1221,6 +1307,26 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
     config
   )
   let siteFiles = [
+    ...(requestMode === "ols"
+      ? [
+          {
+            path: path.join(olsLogDir, `${domain}_error.log`),
+            action: "create",
+            content: "",
+            mode: 0o640,
+            owner: "nobody",
+            group: "nogroup",
+          },
+          {
+            path: path.join(olsLogDir, `${domain}_access.log`),
+            action: "create",
+            content: "",
+            mode: 0o640,
+            owner: "nobody",
+            group: "nogroup",
+          },
+        ].filter((file) => !exists(file.path))
+      : []),
     ...(input.placeholder !== false
       ? [
           {
@@ -1412,6 +1518,8 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
   if (managedSite) {
     const generatedPaths = new Set([
       path.join(config.olsVhosts, domain, "vhconf.conf"),
+      path.join(olsLogDir, `${domain}_error.log`),
+      path.join(olsLogDir, `${domain}_access.log`),
       path.join(siteHome, ".site-config/php.ini"),
       path.join(config.nginxAvailable, `${domain}.conf`),
       path.join(config.nginxAvailable, "vhost_ssl", `${domain}_ssl.conf`),
@@ -1457,7 +1565,7 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
       siteFiles = siteFiles.filter((file) => file !== htaccess)
   }
   const pathConflicts = siteFiles.filter(
-    (item) => !["update", "remove"].includes(item.action) && exists(item.path)
+    (item) => !["update", "remove", "preserve"].includes(item.action) && exists(item.path)
   )
   if (pathConflicts.length)
     throw new Error(
@@ -1474,7 +1582,7 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
       hash: fileHash(file.path),
     }
   })
-  return {
+  const plan = {
     id: crypto.randomUUID(),
     kind: "site",
     domain,
@@ -1484,7 +1592,8 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
     confirmation: domain,
     summary: managedSite
       ? "Update the manager-owned Nginx/OLS site settings and security policy after reviewing each generated diff."
-      : "Create the webroot, site account, eaglesvn.club-based Nginx configs, OLS vhost, and private PHP configuration; enable only the ACME challenge vhost.",
+      : `Create the webroot, site account, Nginx/OLS configs, and private PHP configuration; enable only the ACME challenge vhost.${database.enabled ? ` Also create the ${database.engine} database and a localhost-only user.` : ""}`,
+    database,
     settings: {
       domain,
       aliases: aliases.length ? aliases : [`www.${domain}`],
@@ -1504,6 +1613,9 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
       fileModeText,
       label: String(input.label || domain).slice(0, 120),
       notes: String(input.notes || "").slice(0, 2000),
+      database: database.enabled
+        ? { name: database.name, user: database.user, host: database.host }
+        : null,
       placeholder: input.placeholder !== false,
       robots: input.robots || "allow",
       requestMode,
@@ -1542,6 +1654,9 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
     },
     directories: [
       { path: siteHome, action: "create", owner: "root", group: "root", mode: "0711" },
+      ...(requestMode === "ols" && !exists(olsLogDir)
+        ? [{ path: olsLogDir, action: "create", owner: "root", group: "nogroup", mode: "0750" }]
+        : []),
       {
         path: webroot,
         action: managedSite ? "update permissions" : "create",
@@ -1570,6 +1685,15 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
     ],
     warnings: [
       "The production TLS config remains available but disabled until both certificate files exist.",
+      ...(!templates.deps.geoip
+        ? ["GeoIP country blocking is omitted because no global block_country map is configured."]
+        : []),
+      ...(database.enabled
+        ? [
+            "Database creation requires the local MySQL/MariaDB server to accept root socket authentication.",
+            "A random database password is shown once after apply; the manager does not store it. Database contents remain if the site operation is rolled back.",
+          ]
+        : []),
       ...(!templates.deps.badBot
         ? [
             "The eaglesvn template references $bad_bot, but no global map defines it; that optional rule is omitted.",
@@ -1600,6 +1724,12 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
         ]
       : []),
   }
+  if (database.enabled)
+    Object.defineProperty(plan, "databasePassword", {
+      value: crypto.randomBytes(32).toString("base64url"),
+      enumerable: false,
+    })
+  return plan
 }
 
 function togglePlan(config, input, manifest = {}) {

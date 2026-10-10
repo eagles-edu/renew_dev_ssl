@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { createRoot } from "react-dom/client"
 import starterPolicy from "../../shared/csp-policy.txt?raw"
 import {
@@ -16,11 +17,13 @@ import {
   LayoutDashboard,
   ListFilter,
   LockKeyhole,
+  LogOut,
   Menu,
   Moon,
   Plus,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Search,
   Server,
   ShieldAlert,
@@ -77,6 +80,9 @@ function formDefaults(domain = "", options = {}, phpIni = options.phpIniProfiles
     aliases: "",
     label: "",
     notes: "",
+    createDatabase: false,
+    databaseName: stem.slice(0, 64),
+    databaseUser: `site_${stem}`.slice(0, 32),
     webroot: domain ? `${options.paths?.homeRoot || "/home"}/${domain}/public_html/` : "",
     owner: "dedicated",
     group: "dedicated",
@@ -140,6 +146,11 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false)
   const [detailExpanded, setDetailExpanded] = useState(false)
   const [siteDetails, setSiteDetails] = useState(null)
+  const [databaseCredentials, setDatabaseCredentials] = useState(null)
+  const [sslJob, setSslJob] = useState(null)
+  const [sslResponse, setSslResponse] = useState("")
+  const createHostRef = useRef(null)
+  const sslOutputRef = useRef(null)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -158,6 +169,14 @@ function App() {
     document.documentElement.style.setProperty("--text-scale", textScale)
     window.localStorage.setItem(textScaleKey, String(textScale))
   }, [textScale])
+  useEffect(() => {
+    if (modal === "create")
+      createHostRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [modal])
+  useEffect(() => {
+    const output = sslOutputRef.current
+    if (output) output.scrollTop = output.scrollHeight
+  }, [sslJob?.output])
 
   function adjustTextScale(direction) {
     window.localStorage.setItem(textScaleManualKey, "true")
@@ -196,6 +215,43 @@ function App() {
     }
   }
 
+  async function controlRuntime(action) {
+    if (
+      action === "logoff" &&
+      !window.confirm(
+        "Log off and stop the Vhost Manager runtime? You can start it again from its launcher."
+      )
+    )
+      return
+    setBusy(true)
+    setMessage(action === "restart" ? "Restarting Vhost Manager…" : "Logging off Vhost Manager…")
+    try {
+      const result = await request("runtime", { action })
+      setMessage(result.message)
+      if (action === "restart") {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 500))
+          try {
+            const response = await fetch("/api/status", { cache: "no-store" })
+            if (response.ok) {
+              window.location.reload()
+              return
+            }
+          } catch {
+            // The service is between shutdown and startup; keep polling.
+          }
+        }
+        setMessage(
+          "Restart was requested, but the manager has not reconnected yet. Check its service status."
+        )
+      }
+    } catch (error) {
+      setMessage(error.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   useEffect(() => {
     fetch("/api/session")
       .then((res) => res.json())
@@ -203,8 +259,44 @@ function App() {
       .catch(() => setMessage("Unable to connect to the local manager."))
   }, [])
   useEffect(() => {
+    fetch("/api/ssl-job")
+      .then((res) => res.json())
+      .then(({ job }) => {
+        if (job?.status === "running") {
+          setSslJob(job)
+          setModal("ssl-renewal")
+        }
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
     if (csrf) refresh()
   }, [csrf])
+  useEffect(() => {
+    if (modal !== "ssl-renewal" || sslJob?.status !== "running" || !sslJob.id) return undefined
+    let current = true
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/ssl-job?id=${encodeURIComponent(sslJob.id)}`, {
+          cache: "no-store",
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error || "Unable to read SSL renewal output.")
+        if (current && data.job) {
+          setSslJob(data.job)
+          if (data.job.status !== "running") refresh()
+        }
+      } catch (error) {
+        if (current) setMessage(error.message)
+      }
+    }
+    poll()
+    const timer = window.setInterval(poll, 900)
+    return () => {
+      current = false
+      window.clearInterval(timer)
+    }
+  }, [modal, sslJob?.id, sslJob?.status])
   useEffect(() => {
     if (!csrf) return undefined
     let current = true
@@ -281,6 +373,11 @@ function App() {
         : "",
       nginxAccessLog: stem ? `/var/log/nginx/${stem}_access.log` : "",
       nginxErrorLog: stem ? `/var/log/nginx/${stem}_error.log` : "",
+      databaseName: normalized
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .slice(0, 64),
+      databaseUser: `site_${stem}`.slice(0, 32),
       certificatePath: normalized ? `${acmeHome}/${normalized}_ecc/fullchain.cer` : "",
       privateKeyPath: normalized ? `${acmeHome}/${normalized}_ecc/${normalized}.key` : "",
     }))
@@ -394,7 +491,8 @@ function App() {
     try {
       const result = await request("apply", { planId: plan.id, confirmation })
       setSelected(plan.domain || "")
-      setModal("")
+      setDatabaseCredentials(result.databaseCredentials || null)
+      setModal(result.databaseCredentials ? "database-credentials" : "")
       setPlan(null)
       setConfirmation("")
       await refresh()
@@ -466,6 +564,29 @@ function App() {
       setMessage(error.message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function startSslRenewal(domain) {
+    setSslResponse("")
+    setSslJob({ domain, status: "starting", output: "Preparing the domain certificate inventory…" })
+    setModal("ssl-renewal")
+    try {
+      const result = await request("ssl-renew", { domain })
+      setSslJob(result.job)
+    } catch (error) {
+      setSslJob({ domain, status: "failed", output: error.message, exitCode: 1 })
+    }
+  }
+
+  async function sendSslResponse(event) {
+    event.preventDefault()
+    if (!sslJob?.id || sslJob.status !== "running") return
+    try {
+      await request("ssl-input", { jobId: sslJob.id, text: sslResponse })
+      setSslResponse("")
+    } catch (error) {
+      setMessage(error.message)
     }
   }
 
@@ -548,6 +669,20 @@ function App() {
           </div>
           <Settings2 size={17} />
         </button>
+        <div className="runtime-actions">
+          <button
+            className="nav-item"
+            onClick={() => controlRuntime("restart")}
+            disabled={busy}>
+            <RotateCw size={17} /> Restart
+          </button>
+          <button
+            className="nav-item runtime-stop"
+            onClick={() => controlRuntime("logoff")}
+            disabled={busy}>
+            <LogOut size={17} /> Log off
+          </button>
+        </div>
       </div>
     </>
   )
@@ -796,29 +931,63 @@ function App() {
               role="listbox"
               aria-label="Virtual hosts">
               {visibleSites.map((site) => (
-                <button
+                <div
                   key={site.domain}
-                  role="option"
-                  aria-selected={selected === site.domain}
-                  className={`site-row ${selected === site.domain ? "selected" : ""}`}
-                  onClick={() => setSelected(site.domain)}>
-                  <div
-                    className={`site-favicon ${site.status === "invalid" ? "favicon-warn" : ""}`}>
-                    {site.domain.slice(0, 1).toUpperCase()}
-                  </div>
-                  <div className="site-primary">
-                    <b>{site.domain}</b>
-                    <span>
-                      {site.aliases.length
-                        ? site.aliases.join(", ")
-                        : site.olsVhosts[0]?.name || "No aliases detected"}
-                    </span>
-                  </div>
+                  role="group"
+                  aria-label={site.domain}
+                  className={`site-row ${selected === site.domain ? "selected" : ""}`}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected === site.domain}
+                    className="site-select"
+                    onClick={() => setSelected(site.domain)}>
+                    <div
+                      className={`site-favicon ${site.status === "invalid" ? "favicon-warn" : ""}`}>
+                      {site.domain.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="site-primary">
+                      <b>{site.domain}</b>
+                      <span>
+                        {site.aliases.length
+                          ? site.aliases.join(", ")
+                          : site.olsVhosts[0]?.name || "No aliases detected"}
+                      </span>
+                    </div>
+                  </button>
                   <span
                     className={`status-badge ${site.enabled ? "enabled" : site.status === "invalid" ? "invalid" : "disabled"}`}>
                     <i />
                     {site.enabled ? "Enabled" : site.status === "invalid" ? "Invalid" : "Disabled"}
                   </span>
+                  <div className="site-tls-status">
+                    {site.managed && site.tlsReady ? (
+                      <span className="ssl-valid">
+                        <span className="ssl-pill">SSL OK</span>
+                        <time
+                          dateTime={site.tls.expiresAt}
+                          title={new Date(site.tls.expiresAt).toLocaleString()}>
+                          {new Intl.DateTimeFormat(undefined, {
+                            year: "numeric",
+                            month: "short",
+                            day: "numeric",
+                            timeZone: "Asia/Ho_Chi_Minh",
+                          }).format(new Date(site.tls.expiresAt))}
+                        </time>
+                      </span>
+                    ) : site.managed ? (
+                      <button
+                        type="button"
+                        className="ssl-pill ssl-needs"
+                        aria-label={`Needs SSL for ${site.domain}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          startSslRenewal(site.domain)
+                        }}>
+                        Needs SSL
+                      </button>
+                    ) : null}
+                  </div>
                   <span className="site-stack">
                     {site.nginxConfigs.length ? "Nginx" : "—"} <span>→</span>{" "}
                     {site.olsVhosts.length ? "OLS" : "—"}
@@ -836,7 +1005,7 @@ function App() {
                     className="row-arrow"
                     size={16}
                   />
-                </button>
+                </div>
               ))}
               {visibleSites.length === 0 && (
                 <div className="empty-state">
@@ -868,6 +1037,10 @@ function App() {
               <span>Inventory from canonical server configs</span>
             </div>
           </section>
+          <div
+            className="create-form-slot"
+            ref={createHostRef}
+          />
           <section className="lower-grid">
             <div className="detail-card">
               <div className="card-title">
@@ -1114,14 +1287,11 @@ function App() {
         </div>
       </main>
 
-      {modal === "create" && (
-        <div
-          className="modal-backdrop"
-          role="presentation">
+      {modal === "create" &&
+        createHostRef.current &&
+        createPortal(
           <section
-            className="modal create-modal"
-            role="dialog"
-            aria-modal="true"
+            className="modal create-panel"
             aria-labelledby="create-title">
             <div className="modal-header">
               <div>
@@ -1210,6 +1380,64 @@ function App() {
                 value={form.notes}
                 onChange={(e) => setForm({ ...form, notes: e.target.value })}
               />
+              <h3 className="form-section-title">Optional database</h3>
+              <div className="field-row">
+                <div>
+                  <b>Create a MySQL/MariaDB database</b>
+                  <span>
+                    Creates a new database and localhost-only user. A random password is shown once
+                    after apply.
+                  </span>
+                </div>
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    aria-label="Create a MySQL/MariaDB database"
+                    disabled={editing}
+                    checked={form.createDatabase}
+                    onChange={(e) => setForm({ ...form, createDatabase: e.target.checked })}
+                  />
+                  <i />
+                </label>
+              </div>
+              {form.createDatabase && (
+                <div className="form-two">
+                  <div>
+                    <label
+                      className="field-label"
+                      htmlFor="databaseName">
+                      Database name
+                    </label>
+                    <input
+                      className="plain-input"
+                      id="databaseName"
+                      required
+                      maxLength={64}
+                      value={form.databaseName}
+                      onChange={(e) => setForm({ ...form, databaseName: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="field-label"
+                      htmlFor="databaseUser">
+                      Database user
+                    </label>
+                    <input
+                      className="plain-input"
+                      id="databaseUser"
+                      required
+                      maxLength={32}
+                      value={form.databaseUser}
+                      onChange={(e) => setForm({ ...form, databaseUser: e.target.value })}
+                    />
+                  </div>
+                  <small className="field-help">
+                    The user receives access only to this database from localhost. The password is
+                    generated when you review the plan.
+                  </small>
+                </div>
+              )}
               <h3 className="form-section-title">Webroot setup</h3>
               <div
                 className="site-identity-note"
@@ -1840,14 +2068,21 @@ function App() {
               <label
                 className="field-label"
                 htmlFor="staticCache">
-                Static asset browser cache
+                Site cache profile
               </label>
               <select
                 className="plain-input"
                 id="staticCache"
                 value={form.staticCache}
-                onChange={(e) => setForm({ ...form, staticCache: e.target.value })}>
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    staticCache: e.target.value,
+                    ...(e.target.value === "dev" ? { proxyCache: false } : {}),
+                  })
+                }>
                 <option value="off">Off</option>
+                <option value="dev">Development · no-store</option>
                 <option value="5m">5 minutes</option>
                 <option value="1h">1 hour</option>
                 <option value="30d">30 days</option>
@@ -1856,9 +2091,11 @@ function App() {
                 <div>
                   <b>Shared Nginx proxy cache</b>
                   <span>
-                    {status?.capabilities?.cacheZone
-                      ? "Explicit opt-in. Authorization and cookie requests bypass cache."
-                      : "Unavailable: no global cache_zone is configured."}
+                    {form.staticCache === "dev"
+                      ? "Disabled by the development no-store profile."
+                      : status?.capabilities?.cacheZone
+                        ? "Explicit opt-in. Authorization, cookies, query strings, and Set-Cookie responses bypass cache."
+                        : "Unavailable: no global cache_zone is configured."}
                   </span>
                 </div>
                 <label
@@ -1866,7 +2103,7 @@ function App() {
                   <input
                     type="checkbox"
                     aria-label="Shared Nginx proxy cache"
-                    disabled={!status?.capabilities?.cacheZone}
+                    disabled={!status?.capabilities?.cacheZone || form.staticCache === "dev"}
                     checked={form.proxyCache}
                     onChange={(e) => setForm({ ...form, proxyCache: e.target.checked })}
                   />
@@ -1897,9 +2134,9 @@ function App() {
                 </button>
               </div>
             </form>
-          </section>
-        </div>
-      )}
+          </section>,
+          createHostRef.current
+        )}
 
       {modal === "review" && plan && (
         <div className="modal-backdrop">
@@ -1977,6 +2214,19 @@ function App() {
                 {warning}
               </div>
             ))}
+            {plan.kind === "site" && plan.database?.enabled && (
+              <div className="review-warning">
+                <Server size={17} />
+                <div>
+                  <b>Database resources to create</b>
+                  <span>
+                    {plan.database.engine} schema <code>{plan.database.name}</code> and localhost
+                    user <code>{plan.database.user}</code>. The generated password is delivered once
+                    after apply and is not saved in manager history.
+                  </span>
+                </div>
+              </div>
+            )}
             {plan.kind === "site" && plan.directories?.length > 0 && (
               <div className="file-list directory-list">
                 <div className="file-list-head">
@@ -2107,6 +2357,119 @@ function App() {
         </div>
       )}
 
+      {modal === "database-credentials" && databaseCredentials && (
+        <div className="modal-backdrop">
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="database-credentials-title">
+            <div className="modal-header">
+              <div>
+                <div className="eyebrow">DATABASE CREATED</div>
+                <h2 id="database-credentials-title">Save these credentials</h2>
+                <p>The password is shown once. The manager does not retain it.</p>
+              </div>
+            </div>
+            <div className="directory-review">
+              <span>Host</span>
+              <code>{databaseCredentials.host}</code>
+            </div>
+            <div className="directory-review">
+              <span>Database</span>
+              <code>{databaseCredentials.database}</code>
+            </div>
+            <div className="directory-review">
+              <span>Username</span>
+              <code>{databaseCredentials.username}</code>
+            </div>
+            <div className="directory-review">
+              <span>Password</span>
+              <code>{databaseCredentials.password}</code>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="button primary"
+                onClick={() => {
+                  setDatabaseCredentials(null)
+                  setModal("")
+                }}>
+                Saved credentials <Check size={16} />
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {modal === "ssl-renewal" && sslJob && (
+        <div className="modal-backdrop ssl-renewal-backdrop">
+          <section
+            className="modal ssl-renewal-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ssl-renewal-title">
+            <div className="modal-header">
+              <div>
+                <div className="eyebrow">CERTIFICATE SETUP</div>
+                <h2 id="ssl-renewal-title">SSL for {sslJob.domain}</h2>
+                <p>
+                  The script runs in a root login shell (<code>sudo -i</code>), checks DNS and
+                  Nginx, then guides you through the manual DNS TXT challenge. Enter the exact
+                  response requested by each prompt.
+                </p>
+              </div>
+              {sslJob.status !== "running" && sslJob.status !== "starting" && (
+                <button
+                  className="icon-button"
+                  onClick={() => setModal("")}
+                  aria-label="Close SSL renewal output">
+                  <X size={19} />
+                </button>
+              )}
+            </div>
+            <pre
+              className="ssl-terminal-output"
+              ref={sslOutputRef}
+              aria-label="SSL renewal terminal output">
+              {sslJob.output || "Starting renewal…"}
+            </pre>
+            <form
+              className="ssl-terminal-input"
+              onSubmit={sendSslResponse}>
+              <label htmlFor="ssl-terminal-response">Terminal response</label>
+              <div>
+                <input
+                  id="ssl-terminal-response"
+                  value={sslResponse}
+                  onChange={(event) => setSslResponse(event.target.value)}
+                  disabled={sslJob.status !== "running"}
+                  autoComplete="off"
+                  placeholder="Enter response for the current prompt"
+                />
+                <button
+                  className="button primary"
+                  type="submit"
+                  disabled={sslJob.status !== "running"}>
+                  Send response
+                </button>
+              </div>
+              <small>
+                At restore checkpoints, enter <code>r</code> to roll back and quit.
+              </small>
+            </form>
+            {sslJob.status !== "running" && sslJob.status !== "starting" && (
+              <div className={`ssl-job-result ${sslJob.status}`}>
+                {sslJob.status === "completed"
+                  ? sites.find((site) => site.domain === sslJob.domain)?.tlsReady
+                    ? "SSL OK. The expiry date is now shown beside the pill."
+                    : "The script completed, but no valid certificate was detected yet. Review the terminal output."
+                  : `Renewal stopped with exit code ${sslJob.exitCode ?? "unknown"}. Review the terminal output and correct the reported issue.`}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
       {modal === "history" && (
         <div className="modal-backdrop">
           <section
@@ -2225,10 +2588,7 @@ function App() {
                 </p>
                 <button
                   className="button primary"
-                  onClick={() => {
-                    setModal("")
-                    openCreate()
-                  }}>
+                  onClick={openCreate}>
                   <Plus size={15} /> Create new website
                 </button>
               </div>

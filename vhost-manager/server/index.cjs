@@ -2,12 +2,15 @@ const http = require("node:http")
 const fs = require("node:fs")
 const path = require("node:path")
 const crypto = require("node:crypto")
+const { spawn, spawnSync } = require("node:child_process")
 const core = require("./core.cjs")
 const ops = require("./operations.cjs")
 const security = require("./security.cjs")
 
 const config = core.configFromEnv()
 const plans = new Map()
+let sslJob = null
+const MANAGER_SERVICE = "renew-dev-ssl-vhost-manager.service"
 const csrf = crypto.randomBytes(24).toString("base64url")
 const publicDir = path.join(__dirname, "public")
 const MIME = {
@@ -35,6 +38,20 @@ function safeEqual(a, b) {
   const left = Buffer.from(String(a || ""))
   const right = Buffer.from(String(b || ""))
   return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`
+}
+
+function addJobOutput(job, chunk) {
+  job.output = `${job.output}${chunk}`.slice(-80000)
+}
+
+function publicSslJob(job) {
+  const publicJob = { ...job }
+  delete publicJob.process
+  return publicJob
 }
 
 async function body(req) {
@@ -95,6 +112,16 @@ function api(req, res, url) {
     return send(res, 200, { history: ops.history(config) })
   if (req.method === "GET" && url.pathname === "/api/security")
     return send(res, 200, security.securitySnapshot(config))
+  if (req.method === "GET" && url.pathname === "/api/ssl-job") {
+    const id = url.searchParams.get("id")
+    if (!id) {
+      if (!sslJob) return send(res, 200, { job: null })
+      return send(res, 200, { job: publicSslJob(sslJob) })
+    }
+    if (!sslJob || sslJob.id !== id)
+      return send(res, 404, { error: "SSL renewal session not found." })
+    return send(res, 200, { job: publicSslJob(sslJob) })
+  }
   if (req.method !== "POST") return send(res, 404, { error: "Not found." })
   const origin = req.headers.origin
   if (
@@ -105,8 +132,112 @@ function api(req, res, url) {
     return send(res, 403, { error: "Request origin or CSRF token is invalid." })
   return body(req)
     .then((input) => {
+      if (url.pathname === "/api/ssl-renew") {
+        const domain = String(input.domain || "")
+          .trim()
+          .toLowerCase()
+        if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain))
+          return send(res, 400, { error: "Choose a valid website domain." })
+        if (!config.testMode && process.getuid?.() !== 0)
+          return send(res, 403, { error: "SSL renewal requires the root Vhost Manager service." })
+        if (sslJob?.status === "running")
+          return send(res, 409, { error: `SSL renewal is already running for ${sslJob.domain}.` })
+        const site = scan().sites.find((entry) => entry.domain === domain)
+        if (!site?.managed || !site.nginxConfigs.length)
+          return send(res, 404, {
+            error: "SSL renewal is available for manager-created Nginx virtual hosts.",
+          })
+        if (site.tlsReady)
+          return send(res, 409, { error: `${domain} already has a valid certificate.` })
+        if (config.testMode)
+          return send(res, 501, { error: "SSL renewal is disabled in test mode." })
+
+        const id = crypto.randomUUID()
+        sslJob = {
+          id,
+          domain,
+          status: "running",
+          output: "Entering root login shell with sudo -i…\n",
+          startedAt: new Date().toISOString(),
+          exitCode: null,
+          process: null,
+        }
+        const repoRoot = path.resolve(__dirname, "../..")
+        const renewalCommand = `cd -- ${shellQuote(repoRoot)} && /bin/bash ./update_domain_inventory.sh --add-new ${shellQuote(domain)} && /bin/bash ./renew_all_domains.sh --domain ${shellQuote(domain)}`
+        const command = `/usr/bin/sudo -i /bin/bash -lc ${shellQuote(renewalCommand)}`
+        let child
+        try {
+          child = spawn(
+            "/usr/bin/script",
+            ["--quiet", "--flush", "--return", "--command", command, "/dev/null"],
+            {
+              stdio: ["pipe", "pipe", "pipe"],
+              env: process.env,
+            }
+          )
+          sslJob.process = child
+          child.stdout.on("data", (chunk) => addJobOutput(sslJob, chunk.toString("utf8")))
+          child.stderr.on("data", (chunk) => addJobOutput(sslJob, chunk.toString("utf8")))
+          child.on("error", (error) => {
+            addJobOutput(sslJob, `\nCould not start SSL renewal: ${error.message}\n`)
+            sslJob.status = "failed"
+            sslJob.exitCode = 1
+            sslJob.finishedAt = new Date().toISOString()
+            sslJob.process = null
+          })
+          child.on("close", (code) => {
+            if (sslJob?.id !== id) return
+            sslJob.status = code === 0 ? "completed" : "failed"
+            sslJob.exitCode = code
+            sslJob.finishedAt = new Date().toISOString()
+            sslJob.process = null
+          })
+        } catch (error) {
+          sslJob.status = "failed"
+          sslJob.exitCode = 1
+          sslJob.finishedAt = new Date().toISOString()
+          addJobOutput(sslJob, `Could not start SSL renewal: ${error.message}\n`)
+        }
+        return send(res, 202, { job: publicSslJob(sslJob) })
+      }
+      if (url.pathname === "/api/ssl-input") {
+        const text = String(input.text || "")
+        if (!sslJob || sslJob.id !== input.jobId || sslJob.status !== "running" || !sslJob.process)
+          return send(res, 409, { error: "There is no active SSL renewal prompt." })
+        if (text.length > 2000 || /[\r\n]/.test(text))
+          return send(res, 400, { error: "Enter one response of at most 2,000 characters." })
+        sslJob.process.stdin.write(`${text}\n`)
+        return send(res, 202, { accepted: true })
+      }
       if (url.pathname === "/api/scan")
         return send(res, 200, { inventory: scan(), services: ops.serviceState(config) })
+      if (url.pathname === "/api/runtime") {
+        const actions = { restart: "restart", logoff: "stop" }
+        const systemctlAction = actions[input.action]
+        if (!systemctlAction) return send(res, 400, { error: "Choose restart or log off." })
+        if (!config.testMode && process.getuid?.() !== 0)
+          return send(res, 403, { error: "Runtime controls require the root manager service." })
+        send(res, 202, {
+          action: input.action,
+          message:
+            input.action === "restart"
+              ? "Restarting Vhost Manager…"
+              : "Vhost Manager is shutting down. Use its launcher to start it again.",
+        })
+        setTimeout(() => {
+          if (config.testMode) return
+          const result = spawnSync(
+            "/usr/bin/systemctl",
+            ["--no-block", systemctlAction, MANAGER_SERVICE],
+            { encoding: "utf8", timeout: 5000 }
+          )
+          if (result.status !== 0)
+            process.stderr.write(
+              `Could not ${systemctlAction} ${MANAGER_SERVICE}: ${(result.stderr || result.error?.message || result.stdout || "unknown error").trim()}\n`
+            )
+        }, 150)
+        return
+      }
       if (url.pathname === "/api/plan/reset")
         return send(res, 200, { plan: storePlan(core.resetPlan(config)) })
       if (url.pathname === "/api/archive/examples") {
