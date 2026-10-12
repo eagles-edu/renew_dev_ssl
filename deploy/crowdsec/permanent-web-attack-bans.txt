@@ -1,0 +1,6 @@
+# Manually confirmed web attack sources. The synchronizer adds future matching
+# CrowdSec HTTP probing, brute-force, and exploit alerts below.
+91.92.40.188
+20.219.185.206
+40.83.72.62
+103.235.74.89

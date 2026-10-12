@@ -41,8 +41,9 @@
 - `failedLogins` counts SSH `Failed password` and `Failed publickey` journal entries within the trailing 24-hour window.
 - `sources.ssh.available` reports whether the local SSH journal could be read; `acquisitionConfiguredInCrowdSec` reports whether CrowdSec has the corresponding source configured.
 - `deniedRequests` counts Nginx responses with status 401, 403, 429, or 444.
-- `activeBlocks` counts unique IPs with an active CrowdSec IP-scope decision. It does not estimate packets dropped by the firewall.
-- Permanent SSH brute-force IPs from `/var/lib/crowdsec/permanent-ssh-bans.txt` are also included in `activeBlocks` and marked `permanent` in `topSources`; they remain blocked after CrowdSec decisions expire.
+- `activeBlocks` counts unique IPs with an active CrowdSec IP-scope decision or a local permanent-ban entry. It does not estimate packets dropped by the firewall.
+- Permanent SSH brute-force IPs from `/var/lib/crowdsec/permanent-ssh-bans.txt` and permanent web attack IPs from `/var/lib/crowdsec/permanent-web-attack-bans.txt` are included in `activeBlocks` and marked `permanent` in `topSources`; web bans remain enforced after CrowdSec decisions expire.
+- `sources.web.permanentBanCount` reports the number of persisted web attack IPs. CrowdSec HTTP security alerts and AppSec virtual-patch exploit alerts are synchronized to nftables and Nginx; trusted OneShield proxy ranges are excluded.
 - `topSources` contains IPs associated with attack signals or active decisions, with request counts, last-seen time, and country from Nginx logs, CrowdSec decisions, or the local GeoIP country database.
 - `countries` groups logged country data and locally resolved countries for attack sources. The endpoint performs no external IP lookups. Without the local database, unknown countries remain explicit.
 

@@ -1,6 +1,41 @@
 # CrowdSec SSH and Nginx acquisition
 
-CrowdSec must read the SSH systemd journal for SSH authentication failures to reach the enabled SSH scenarios. The local rule blocks an IP after five parsed SSH authentication failures in the dashboard's 24-hour window. Its one-year CrowdSec decision is a fallback; a companion systemd service copies matching alerts into `/var/lib/crowdsec/permanent-ssh-bans.txt` and a no-timeout nftables set, so these SSH brute-force bans persist across CrowdSec decision expiry and reboot. Other IP and range decisions retain their four-hour duration.
+SSH is disabled on this host; do not enable it as part of web attack response. The older SSH journal scenario and its persistent set are separate from the web policy below.
+
+## Permanent web attack bans
+
+Every unsimulated, IP-scoped CrowdSec HTTP security alert with remediation enabled is a permanent ban. This includes reconnaissance/probing, login brute force, backdoor scans, and other installed `crowdsecurity/http-*` scenarios. Every CrowdSec AppSec virtual-patch (`crowdsecurity/vpatch-*`) exploit alert also becomes a permanent ban. The synchronizer checks alerts every 30 seconds and stores each source in `/var/lib/crowdsec/permanent-web-attack-bans.txt`, a no-timeout nftables set, and an Nginx IP map. Nginx enforces the map using the client address after trusted OneShield `X-Forwarded-For` processing, so requests through the proxy are blocked by client IP. The direct-origin nftables set also covers traffic that bypasses OneShield.
+
+Never ban an address inside the trusted OneShield ranges: WAF events can report the proxy address instead of the original client. Those ranges are read from the same Nginx trust snippet by the synchronizer. If the snippet is missing or has no trusted ranges, the synchronizer fails closed and does not add detections.
+
+Install or update the web policy as root. Preserve the runtime ban list if it already exists:
+
+```bash
+sudo install -o root -g root -m 0644 deploy/nginx/oneshield-realip.conf /etc/nginx/snippets/oneshield-realip.conf
+sudo install -o root -g root -m 0644 deploy/nginx/geoip-country-map.conf /etc/nginx/snippets/geoip-country-map.conf
+sudo install -o root -g root -m 0644 deploy/nginx/geoip-country-block.conf /etc/nginx/snippets/geoip-country-block.conf
+if ! sudo test -e /var/lib/crowdsec/permanent-web-attack-bans.txt; then sudo install -o root -g root -m 0600 deploy/crowdsec/permanent-web-attack-bans.txt /var/lib/crowdsec/permanent-web-attack-bans.txt; fi
+if ! sudo test -e /var/lib/crowdsec/permanent-web-attack-map.conf; then sudo install -o root -g root -m 0640 /dev/null /var/lib/crowdsec/permanent-web-attack-map.conf; fi
+sudo install -o root -g root -m 0755 deploy/crowdsec/permanent-web-attack-bans.py /usr/local/sbin/renew-ssl-permanent-web-attack-bans.py
+sudo install -o root -g root -m 0644 deploy/crowdsec/renew-permanent-web-attack-bans.service /etc/systemd/system/renew-permanent-web-attack-bans.service
+sudo install -o root -g root -m 0644 deploy/crowdsec/renew-permanent-web-attack-bans.timer /etc/systemd/system/renew-permanent-web-attack-bans.timer
+sudo nginx -t
+sudo systemctl reload nginx
+sudo systemctl daemon-reload
+sudo systemctl enable --now renew-permanent-web-attack-bans.service renew-permanent-web-attack-bans.timer
+```
+
+Verify the permanent path and dashboard:
+
+```bash
+sudo systemctl is-active crowdsec-firewall-bouncer.service renew-permanent-web-attack-bans.timer
+sudo cat /var/lib/crowdsec/permanent-web-attack-bans.txt
+sudo nft list table inet renew_web_permanent
+sudo nginx -T 2>/dev/null | rg 'permanent_web_attack_ban|real_ip_recursive on'
+curl -fsS http://127.0.0.1:4310/api/security
+```
+
+To intentionally release a web source, add its exact IP to `/var/lib/crowdsec/permanent-web-attack-releases.txt`. The next sync removes it from persistent state, both nftables sets, and the Nginx map despite its historical CrowdSec alert. Remove it from the release file only if the permanent ban should apply again. Remove its current CrowdSec decision separately if that temporary decision is still active.
 
 Install or update the checked-in sources as root, preserving the host's existing configuration before replacing it:
 

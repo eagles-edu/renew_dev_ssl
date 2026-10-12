@@ -11,7 +11,8 @@ left unresolved; values are supplied by the reviewed site plan.
 | `ols-main-vhost.conf.tpl`                      | OLS `virtualhost` block in `httpd_config.conf`           | vhost name and site root                                                                                       |
 | `ols-vhost.conf.tpl`                           | `/usr/local/lsws/conf/vhosts/<domain>/vhconf.conf`       | domain, aliases, webroot, logs, PHP handler and identity                                                       |
 | `php.ini.tpl`                                  | private per-site PHP ini                                 | selected profile contents and reviewed per-site directive overrides                                            |
-| `placeholder.html.tpl`                         | initial `index.html`                                     | escaped site title                                                                                             |
+| `placeholder.html.tpl`                         | initial `index.html`                                     | dynamic hostname shown by the page                                                                             |
+| `favicon.svg.tpl`                              | initial `favicon.svg`                                    | none                                                                                                           |
 | `robots-allow.txt.tpl`, `robots-block.txt.tpl` | `robots.txt`                                             | none                                                                                                           |
 | `htaccess.tpl`                                 | optional OLS `.htaccess`                                 | domain                                                                                                         |
 

@@ -1,0 +1,244 @@
+#!/usr/bin/env node
+"use strict"
+
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const sourcePath = path.join(root, "docs/oneshield-request-flows.md")
+const outputPath = path.join(root, "docs/oneshield-request-flows.html")
+const markdown = fs.readFileSync(sourcePath, "utf8")
+const diagrams = []
+
+const blocks = [...markdown.matchAll(/^```mermaid\s*\n([\s\S]*?)^```\s*$/gm)]
+for (const [index, block] of blocks.entries()) {
+  const before = markdown.slice(0, block.index)
+  const headings = [...before.matchAll(/^#{1,3}\s+(.+)$/gm)]
+  const heading = headings.at(-1)?.[1]?.replace(/`/g, "") ?? `Diagram ${index + 1}`
+  diagrams.push({ title: heading, source: block[1].trim() })
+}
+
+if (diagrams.length === 0) {
+  throw new Error(`No Mermaid diagrams found in ${sourcePath}`)
+}
+
+function escapeHtml(value) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character]
+  )
+}
+
+const cards = diagrams
+  .map(({ title, source }, index) => {
+    const id = `oneshield-diagram-${index + 1}`
+    return `
+      <section class="diagram-card" aria-labelledby="${id}-title">
+        <header class="diagram-header">
+          <h2 id="${id}-title">${escapeHtml(title)}</h2>
+          <div class="diagram-actions">
+            <button class="expand-button" type="button" aria-expanded="false" aria-controls="${id}-canvas">Full screen</button>
+            <div class="zoom-controls" hidden aria-label="Diagram zoom controls">
+              <button class="zoom-out" type="button" aria-label="Zoom out">−</button>
+              <output class="zoom-level" aria-live="polite">100%</output>
+              <button class="zoom-in" type="button" aria-label="Zoom in">+</button>
+              <button class="zoom-fit" type="button">Fit</button>
+            </div>
+            <button class="close-button" type="button" hidden>Close full screen</button>
+          </div>
+        </header>
+        <div class="diagram-frame" id="${id}-canvas" role="img" aria-label="${escapeHtml(title)} diagram">
+          <div class="diagram-output" aria-live="polite">Loading diagram…</div>
+        </div>
+        <details class="source-details">
+          <summary>View diagram source</summary>
+          <pre class="diagram-source">${escapeHtml(source)}</pre>
+        </details>
+      </section>`
+  })
+  .join("\n")
+
+const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>OneShield request-flow diagrams</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f3f6fa; color: #172335; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f6fa; color: #172335; }
+    main { width: 100%; max-width: 1920px; margin: 0 auto; padding: clamp(16px, 3vw, 40px); }
+    .page-header { margin: 0 auto 24px; max-width: 1100px; }
+    .page-header h1 { margin: 0 0 10px; font-size: clamp(1.65rem, 3vw, 2.4rem); line-height: 1.15; }
+    .page-header p { margin: 0; max-width: 80ch; line-height: 1.6; color: #45566c; }
+    .page-header a { color: #0759b5; }
+    .diagram-list { display: grid; gap: 20px; }
+    .diagram-card { min-width: 0; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 14px; background: #fff; box-shadow: 0 6px 24px #17233512; }
+    .diagram-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-bottom: 1px solid #dce3ec; }
+    .diagram-header h2 { margin: 0; font-size: clamp(1rem, 1.8vw, 1.35rem); }
+    .diagram-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+    button { min-height: 48px; padding: 9px 16px; border: 1px solid #0759b5; border-radius: 9px; background: #0759b5; color: white; font: inherit; font-weight: 650; cursor: pointer; }
+    button:hover { background: #064a96; }
+    button:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid #f3a712; outline-offset: 3px; }
+    .close-button { background: #26364a; border-color: #26364a; }
+    .zoom-controls { display: flex; align-items: center; gap: 6px; }
+    .zoom-controls button { min-width: 48px; padding: 8px 12px; }
+    .zoom-level { min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
+    .diagram-frame { display: grid; min-height: 300px; max-height: 76vh; overflow: auto; place-items: center; padding: 16px; background: #fff; }
+    .diagram-output { width: 100%; min-width: 0; text-align: center; }
+    .diagram-output svg { display: block; width: 100%; height: auto; max-width: 100%; margin: 0 auto; }
+    .diagram-output .error { color: #9b1c1c; text-align: left; }
+    .source-details { padding: 12px 18px 16px; border-top: 1px solid #dce3ec; }
+    .source-details summary { width: fit-content; cursor: pointer; color: #0759b5; font-weight: 600; }
+    .diagram-source { overflow: auto; max-height: 42vh; padding: 12px; border-radius: 8px; background: #f1f4f8; color: #172335; text-align: left; white-space: pre; }
+    .diagram-card.is-expanded { position: fixed; z-index: 9999; inset: 0; display: grid; width: 100vw; height: 100vh; height: 100dvh; max-width: none; grid-template-rows: auto minmax(0, 1fr); border: 0; border-radius: 0; background: #f3f6fa; }
+    .diagram-card.is-expanded .diagram-header { padding: 12px clamp(12px, 3vw, 36px); }
+    .diagram-card.is-expanded .diagram-frame { width: 100%; min-height: 0; max-height: none; padding: clamp(8px, 2vw, 28px); }
+    .diagram-card.is-expanded .diagram-output, .diagram-card.is-expanded .diagram-output svg { width: 100%; height: 100%; max-width: none; }
+    .diagram-card.is-expanded .source-details { display: none; }
+    body.diagram-expanded { overflow: hidden; }
+    @media (max-width: 640px) {
+      main { padding: 12px; }
+      .diagram-header { align-items: flex-start; flex-direction: column; }
+      .diagram-actions { width: 100%; }
+      .diagram-actions button { flex: 1; }
+      .diagram-frame { max-height: 70vh; padding: 8px; }
+      .diagram-card.is-expanded .diagram-header { flex-direction: row; align-items: center; }
+      .diagram-card.is-expanded .diagram-header h2 { font-size: 1rem; }
+      .diagram-card.is-expanded .diagram-actions { width: auto; }
+      .diagram-card.is-expanded .zoom-controls { gap: 4px; }
+      .diagram-card.is-expanded .zoom-controls button { min-width: 44px; padding: 8px; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, body { background: #111827; color: #e7edf5; }
+      .page-header p { color: #bdc8d7; }
+      .page-header a, .source-details summary { color: #8fc3ff; }
+      .diagram-card, .diagram-frame { background: #fff; }
+      .diagram-card { color: #172335; }
+      .diagram-header, .source-details { border-color: #465366; }
+      .diagram-source { background: #e9eef5; color: #172335; }
+      .diagram-card.is-expanded { background: #111827; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="page-header">
+      <h1>OneShield request-flow diagrams</h1>
+      <p>Choose <strong>Full screen</strong> on any diagram to expand it to the screen. Use <strong>+</strong> or <strong>−</strong> to zoom, <strong>Fit</strong> to reset, and Escape or the close button to return. The flow definitions come from the <a href="oneshield-request-flows.md">editable Markdown source</a>. Rendering uses a pinned Mermaid module from jsDelivr; if it is unavailable, each source remains available below its diagram.</p>
+      <p id="render-status" role="status">Rendering diagrams…</p>
+    </header>
+    <div class="diagram-list">${cards}
+    </div>
+  </main>
+  <script type="module">
+    const status = document.querySelector("#render-status");
+    const cards = [...document.querySelectorAll(".diagram-card")];
+    try {
+      const { default: mermaid } = await import("https://cdn.jsdelivr.net/npm/mermaid@12.1.0/dist/mermaid.esm.min.mjs");
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "neutral", flowchart: { useMaxWidth: true } });
+      for (const [index, card] of cards.entries()) {
+        const source = card.querySelector(".diagram-source").textContent;
+        const { svg } = await mermaid.render("oneshield-flow-" + (index + 1), source);
+        const output = card.querySelector(".diagram-output");
+        output.innerHTML = svg;
+        const svgElement = output.querySelector("svg");
+        svgElement?.setAttribute("role", "img");
+        svgElement?.setAttribute("aria-label", card.querySelector("h2").textContent);
+        svgElement?.setAttribute("focusable", "false");
+      }
+      status.textContent = "All diagrams rendered. Open any one full screen for detailed inspection.";
+    } catch (error) {
+      status.textContent = "Diagram rendering needs an internet connection to load Mermaid. The source for each diagram is available below it.";
+      for (const output of document.querySelectorAll(".diagram-output")) {
+        output.innerHTML = "<p class=\\"error\\">Could not load the diagram renderer. Open “View diagram source” below.</p>";
+      }
+      console.error(error);
+    }
+
+    let activeCard = null;
+    function closeExpandedCard({ exitNativeFullscreen = true } = {}) {
+      if (!activeCard) return;
+      const card = activeCard;
+      const expandButton = card.querySelector(".expand-button");
+      card.classList.remove("is-expanded");
+      document.body.classList.remove("diagram-expanded");
+      expandButton.setAttribute("aria-expanded", "false");
+      card.querySelector(".zoom-controls").hidden = true;
+      card.querySelector(".close-button").hidden = true;
+      expandButton.hidden = false;
+      activeCard = null;
+      if (exitNativeFullscreen && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      expandButton.focus();
+    }
+
+    for (const card of cards) {
+      const expandButton = card.querySelector(".expand-button");
+      const closeButton = card.querySelector(".close-button");
+      const zoomControls = card.querySelector(".zoom-controls");
+      const zoomLevel = card.querySelector(".zoom-level");
+      let zoom = 1;
+      function setZoom(value) {
+        zoom = Math.max(1, Math.min(3, value));
+        const svg = card.querySelector(".diagram-output svg");
+        if (svg) {
+          svg.style.width = String(zoom * 100) + "%";
+          svg.style.maxWidth = "none";
+          svg.style.height = "auto";
+        }
+        zoomLevel.value = String(Math.round(zoom * 100)) + "%";
+      }
+      expandButton.addEventListener("click", async () => {
+        activeCard = card;
+        card.classList.add("is-expanded");
+        document.body.classList.add("diagram-expanded");
+        expandButton.setAttribute("aria-expanded", "true");
+        expandButton.hidden = true;
+        zoom = 1;
+        setZoom(zoom);
+        zoomControls.hidden = false;
+        closeButton.hidden = false;
+        closeButton.focus();
+        if (card.requestFullscreen) {
+          try { await card.requestFullscreen(); } catch { /* The fixed overlay remains full-screen. */ }
+        }
+      });
+      closeButton.addEventListener("click", () => closeExpandedCard());
+      card.querySelector(".zoom-out").addEventListener("click", () => setZoom(zoom - 0.25));
+      card.querySelector(".zoom-in").addEventListener("click", () => setZoom(zoom + 0.25));
+      card.querySelector(".zoom-fit").addEventListener("click", () => setZoom(1));
+    }
+
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement && activeCard) closeExpandedCard({ exitNativeFullscreen: false });
+    });
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Escape" && activeCard) {
+          event.preventDefault();
+          closeExpandedCard();
+        }
+      },
+      true,
+    );
+  </script>
+</body>
+</html>
+`
+
+fs.writeFileSync(outputPath, html)
+console.log(
+  `Generated ${path.relative(root, outputPath)} from ${diagrams.length} Mermaid diagrams.`
+)

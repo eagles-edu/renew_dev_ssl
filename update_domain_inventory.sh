@@ -283,11 +283,18 @@ main() {
     fi
   } > "$OUTPUT_PATH"
 
-  # Preserve access for the checkout owner when this is run with sudo.
+  # Preserve access for the checkout owner when this is run with sudo or from
+  # a root login shell (where SUDO_UID/SUDO_GID may not be available).
   if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ && "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then
     chown "$SUDO_UID:$SUDO_GID" "$OUTPUT_PATH"
+  elif [ "$(id -u)" -eq 0 ]; then
+    output_dir="$(dirname -- "$OUTPUT_PATH")"
+    output_owner="$(stat -c '%u:%g' "$output_dir")"
+    if [ "$output_owner" != "0:0" ]; then
+      chown "$output_owner" "$OUTPUT_PATH"
+    fi
   fi
-  chmod 0640 "$OUTPUT_PATH"
+  chmod 0664 "$OUTPUT_PATH"
   printf 'Updated: %s\n' "$OUTPUT_PATH"
 }
 

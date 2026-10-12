@@ -1,0 +1,91 @@
+Subject: OneShield edge returns 404 for www.obgyn.eaglesvn.club while sibling hosts work
+
+Service: OneShield Standard
+Zone: eaglesvn.club
+Affected hostname: www.obgyn.eaglesvn.club
+Origin: 103.72.98.158
+
+Problem
+=======
+Requests to https://www.obgyn.eaglesvn.club/ return an iNET/OneShield edge
+404 page ("404 | Không tìm thấy"). The same site works through the origin,
+and the sibling hostname www.eaglesvn.club works through the same OneShield
+edge addresses.
+
+Please inspect the OneShield edge hostname/virtual-host routing for
+www.obgyn.eaglesvn.club in the eaglesvn.club zone. Please provision or repair
+the hostname route so requests for this Host/SNI reach the intended origin
+(103.72.98.158), and confirm the required certificate/hostname setup. Please
+also identify why the current edge route returns 404 and provide the exact
+configuration correction.
+
+Evidence
+========
+* OneShield is active in nameserver mode for eaglesvn.club.
+* www.eaglesvn.club is a CNAME to eaglesvn.club.
+* obgyn.eaglesvn.club is an A record for the same protected site.
+* www.obgyn.eaglesvn.club is a CNAME to obgyn.eaglesvn.club.
+* Both hostname chains resolve to the same OneShield IPv4 edge pool:
+  103.56.163.10, 103.166.183.10, 103.216.118.10.
+* With a Chrome user agent, https://www.eaglesvn.club/ returns HTTP 200 through
+  each tested edge address. https://www.obgyn.eaglesvn.club/ returns HTTP 404
+  through each of those same edge addresses.
+* The nested hostname also returns 404 through the tested IPv6 edge address
+  2001:df7:ce00:16::3:0.
+* Direct-origin HTTPS requests to 103.72.98.158 using either hostname return
+  HTTP 200.
+* The edge-only failing probes did not appear in the origin access log,
+  indicating the failure occurs before the request reaches the origin.
+* As a diagnostic, www.obgyn.eaglesvn.club was temporarily changed from its
+  CNAME to a protected A record at 103.72.98.158. The edge 404 persisted. The
+  original CNAME to obgyn.eaglesvn.club has been restored.
+
+Update after iNET's proposed fix
+================================
+iNET identified that list_cdn_zone_ddos_hostnames contains only eaglesvn.club
+and obgyn.eaglesvn.club, and proposed changing www.obgyn to a proxied A record
+pointing to the origin. I applied that change in OnePortal:
+
+* www.obgyn is now an A record for 103.72.98.158, TTL 5m, Protection Enabled.
+* The portal confirmed that the DNS record was updated successfully.
+* Both authoritative nameservers now return the OneShield edge pool for the A
+  record: 103.56.163.10, 103.166.183.10, 103.216.118.10.
+* The edge still returns HTTP 404 from all three IPv4 addresses. The response
+  has x-request-id but no x-osh-dp header, so it still does not reach a
+  dataplane.
+* A fresh public HTTPS check also returns 404 without x-osh-dp:
+  01M4NHP1SA7HP1DGBA02RFC9KW. In the same check, eaglesvn.club,
+  www.eaglesvn.club, and obgyn.eaglesvn.club return HTTP 200 with x-osh-dp
+  headers.
+* Direct-origin HTTPS with a Chrome user agent still returns HTTP 200.
+
+Request IDs from the post-change probes, mapped in order to the three IPv4
+addresses 103.56.163.10, 103.166.183.10, and 103.216.118.10:
+01M4NHF2S96CVSMDC1FRBE5W9P
+01M4NHF2SSJ0FS4SCC2SPC28BZ
+01M4NHF2S29CFSHQW3TCNXF29M
+
+Please confirm whether the proxied A record should automatically add
+www.obgyn.eaglesvn.club to list_cdn_zone_ddos_hostnames. If it should, please
+repair or refresh that edge hostname route and confirm when the hostname is
+present on the dataplane. If a separate manual hostname registration is
+required, please perform or specify that step; the protected A record alone
+has not resolved the 404.
+
+Current DNS state
+=================
+www.obgyn is currently a protected A record for 103.72.98.158. No separate
+subdomain DNS zone has been created. Keep this record in place while repairing
+the edge route, or coordinate any further DNS change with us and explain why
+it is required.
+
+Correction to iNET's latest proposed target
+===========================================
+The production origin is 103.72.98.158. The suggested address 103.56.163.145
+is not the correct origin for this site. I verified in OnePortal that
+www.obgyn is already a protected A record pointing to 103.72.98.158 (TTL 5m,
+Protection Enabled). Please keep that target and repair the missing edge
+hostname route for www.obgyn.eaglesvn.club; changing the origin address will
+not address the observed edge 404.
+
+Thanks, INET!

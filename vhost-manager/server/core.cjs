@@ -299,15 +299,12 @@ function updatePersistentFirewall(source, domain, nextPorts, protocol) {
 
 function accountForDomain(domain, createdAt = new Date()) {
   const normalized = String(domain).toLowerCase()
-  const prefix = normalized.replace(/[^a-z]/g, "").slice(0, 4)
-  const domainSlug = normalized
-    .split(".")
-    .slice(1)
-    .join("_")
-    .replace(/[^a-z0-9_]/g, "")
+  const labels = normalized.split(".")
+  const prefix = (labels[0] || "").replace(/[^a-z]/g, "").slice(0, 4)
+  const domainSuffix = (labels.at(-1) || "").replace(/[^a-z0-9]/g, "")
   const date = createdAt instanceof Date ? createdAt : new Date(createdAt)
   const monthYear = `${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getFullYear()).slice(-2)}`
-  const account = `${prefix}${domainSlug}${monthYear}`
+  const account = `${prefix}${domainSuffix}${monthYear}`
   if (account.length > 32)
     throw new Error("This domain produces a Unix account longer than Ubuntu's 32-character limit.")
   return account
@@ -761,7 +758,19 @@ function renderFromEaglesvn(domain, aliases, webroot, cert, key, config, options
   const names = [domain, ...aliases].join(" ")
   const stem = domain.replace(/[^a-z0-9]+/g, "_")
   const deps = depsInNginx(config)
-  const policy = String(options.cspPolicy || DEFAULT_CSP_POLICY)
+  const policyDirectives = String(options.cspPolicy || DEFAULT_CSP_POLICY)
+    .split(";")
+    .map((directive) => directive.trim())
+    .filter(
+      (directive) =>
+        directive &&
+        !(
+          options.cspMode === "report-only" &&
+          directive.toLowerCase() === "upgrade-insecure-requests"
+        )
+    )
+  const policy = policyDirectives
+    .join("; ")
     .replace(/[\r\n"\\]/g, " ")
     .trim()
   const cspHeader =
@@ -878,7 +887,7 @@ function renderFromEaglesvn(domain, aliases, webroot, cert, key, config, options
 function setListenerMap(source, listenerName, vhost, domains) {
   const block = parseOlsBlocks(source, "listener").find((item) => item.name === listenerName)
   if (!block) throw new Error(`OpenLiteSpeed listener '${listenerName}' was not found.`)
-  const mapLine = `  map ${vhost} ${domains.join(" ")}\n`
+  const mapLine = `  map ${vhost} ${domains.join(", ")}\n`
   const existing = new RegExp(
     `^([\\t ]*map\\s+)${vhost.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s+[^\\n]*(?:\\n|$)`,
     "m"
@@ -1341,6 +1350,14 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
             owner: account,
             group,
           },
+          {
+            path: path.join(webroot, "favicon.svg"),
+            action: "create",
+            content: renderBoilerplate("favicon.svg.tpl", {}, config),
+            mode: fileMode,
+            owner: account,
+            group,
+          },
         ]
       : []),
     ...(input.robots !== "omit"
@@ -1518,6 +1535,8 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
   if (managedSite) {
     const generatedPaths = new Set([
       path.join(config.olsVhosts, domain, "vhconf.conf"),
+      path.join(webroot, "index.html"),
+      path.join(webroot, "favicon.svg"),
       path.join(olsLogDir, `${domain}_error.log`),
       path.join(olsLogDir, `${domain}_access.log`),
       path.join(siteHome, ".site-config/php.ini"),

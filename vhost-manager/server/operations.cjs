@@ -152,6 +152,40 @@ function reloadService(service, config) {
     throw new Error(`Could not ${action} ${service}: ${(result.stderr || result.stdout).trim()}`)
 }
 
+function checkSiteResponse(domain, config) {
+  if (config.testMode) return { ok: true, skipped: true, status: null }
+  const result = run(
+    "/usr/bin/curl",
+    [
+      "--silent",
+      "--show-error",
+      "--location",
+      "--max-time",
+      "12",
+      "--resolve",
+      `${domain}:80:127.0.0.1`,
+      "--resolve",
+      `${domain}:443:127.0.0.1`,
+      "--insecure",
+      "--user-agent",
+      "Mozilla/5.0 VHostManager/1.0",
+      "--output",
+      "/dev/null",
+      "--write-out",
+      "%{http_code}",
+      `http://${domain}/`,
+    ],
+    config
+  )
+  const status = Number(result.stdout.trim())
+  const ok = result.status === 0 && status >= 200 && status < 400
+  return {
+    ok,
+    status: Number.isFinite(status) ? status : null,
+    output: (result.stderr || result.stdout).trim().slice(0, 800),
+  }
+}
+
 function restoreAndReload(snapshot, config, cause, recover) {
   restoreSnapshot(snapshot)
   if (recover) recover()
@@ -642,6 +676,11 @@ function applySite(plan, config) {
       reconcileFirewall(domain, firewallPrevious, plan.firewall.ports, config)
     reloadService("nginx", config)
     reloadService("lshttpd", config)
+    const siteResponse = checkSiteResponse(domain, config)
+    if (!siteResponse.ok)
+      throw new Error(
+        `The site did not serve a navigable response after reload (HTTP ${siteResponse.status ?? "unknown"}). ${siteResponse.output || "Check the active Nginx route, OpenLiteSpeed listener map, and site index."}`
+      )
     databaseResult = provisionDatabase(plan.database, plan.databasePassword, config)
     const manifestEntry = {
       domain,
@@ -706,6 +745,7 @@ function applySite(plan, config) {
     return {
       operation,
       checks,
+      siteResponse,
       ...(databaseResult ? { databaseCredentials: databaseResult.credentials } : {}),
     }
   } catch (error) {

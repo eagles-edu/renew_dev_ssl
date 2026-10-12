@@ -1,0 +1,15 @@
+[Unit]
+Description=Restrict public origin HTTP and HTTPS to iNET OneShield
+Documentation=https://developers.inet.vn/docs/oneportal/oneshield-danh-sach-ip
+After=network-pre.target netfilter-persistent.service
+Before=nginx.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/oneshield-origin-firewall.nft
+ExecReload=/usr/sbin/nft -f /etc/nftables.d/oneshield-origin-firewall.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

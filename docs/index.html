@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0" />
+    <title>Super-Pad Engine | Interactive Audio Suite</title>
+    <link
+      rel="dns-prefetch"
+      href="//dns-check-example.com" />
+    <style>
+      :root {
+        --bg-color: #030712;
+        --card-bg: #111827;
+        --card-border: #1f2937;
+        --text-main: #f9fafb;
+        --text-muted: #9ca3af;
+        --accent: #38bdf8;
+        --success: #10b981;
+        --error: #ef4444;
+        --header-footer-bg: #030712;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: var(--bg-color);
+        color: var(--text-main);
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
+
+      /* Layout Framework */
+      header,
+      footer {
+        background-color: var(--header-footer-bg);
+        padding: 16px 20px;
+        text-align: center;
+        border-bottom: 1px solid var(--card-border);
+        z-index: 10;
+      }
+
+      footer {
+        border-bottom: none;
+        border-top: 1px solid var(--card-border);
+        margin-top: auto;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+      }
+
+      /* Theme Selectors */
+      .theme-selector {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        margin: 10px 0;
+      }
+      .theme-pill {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        cursor: pointer;
+        border: 2px solid #fff;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      }
+
+      /* News Ticker Scroller */
+      .ticker-wrap {
+        background: #1f2937;
+        color: var(--accent);
+        padding: 8px 0;
+        overflow: hidden;
+        font-size: 0.85rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        border-bottom: 1px solid var(--card-border);
+      }
+
+      .ticker {
+        display: flex;
+        white-space: nowrap;
+        animation: ticker linear 28s infinite;
+      }
+      .ticker:hover {
+        animation-play-state: paused;
+      }
+      .ticker-item {
+        padding: 0 40px;
+        display: inline-block;
+      }
+
+      @keyframes ticker {
+        0% {
+          transform: translate3d(0, 0, 0);
+        }
+        100% {
+          transform: translate3d(-50%, 0, 0);
+        }
+      }
+
+      /* Mobile-First Centered Container */
+      .main-container {
+        width: 100%;
+        max-width: 500px;
+        margin: 0 auto;
+        padding: 20px 14px;
+        box-sizing: border-box;
+      }
+
+      .card {
+        background-color: var(--card-bg);
+        border-radius: 16px;
+        padding: 22px;
+        box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+        border: 1px solid var(--card-border);
+        margin-bottom: 20px;
+        transition: border-color 0.3s ease;
+      }
+      .card:hover {
+        border-color: var(--accent);
+      }
+
+      h1,
+      h2 {
+        font-size: 1.6rem;
+        margin-top: 0;
+        margin-bottom: 8px;
+        letter-spacing: -0.02em;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .domain-name {
+        color: var(--accent);
+        font-weight: 700;
+      }
+      p.subtitle {
+        color: var(--text-muted);
+        margin-top: 0;
+        margin-bottom: 18px;
+        font-size: 0.9rem;
+        line-height: 1.4;
+      }
+
+      /* Form Controls */
+      select {
+        width: 100%;
+        padding: 12px;
+        background: #1f2937;
+        border: 1px solid #374151;
+        color: #fff;
+        border-radius: 8px;
+        box-sizing: border-box;
+        font-family: inherit;
+        font-size: 0.95rem;
+        margin-bottom: 14px;
+        accent-color: var(--accent);
+      }
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+        margin: 8px 0;
+      }
+
+      .btn-primary {
+        background-color: var(--accent);
+        color: #030712;
+        border: none;
+        padding: 10px 16px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: opacity 0.2s;
+        width: 100%;
+      }
+
+      /* Synth Pad Element Interface */
+      .synth-surface {
+        width: 100%;
+        height: 180px;
+        background: linear-gradient(135deg, #0f172a 0%, #030712 100%);
+        border-radius: 12px;
+        border: 2px dashed var(--accent);
+        position: relative;
+        cursor: crosshair;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: none;
+      }
+      .synth-grid-line {
+        position: absolute;
+        background: rgba(56, 189, 248, 0.08);
+        pointer-events: none;
+      }
+      .synth-status-overlay {
+        font-family: monospace;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        pointer-events: none;
+        text-align: center;
+        z-index: 2;
+      }
+      .synth-crosshair {
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        display: none;
+        background: rgba(255, 255, 255, 0.1);
+        box-shadow: 0 0 10px var(--accent);
+      }
+
+      /* Interactive Output Panels */
+      .output-box {
+        background: #030712;
+        padding: 12px;
+        border-radius: 8px;
+        font-family: monospace;
+        font-size: 0.85rem;
+        color: var(--success);
+        word-break: break-all;
+        margin-top: 10px;
+        border: 1px dashed #374151;
+      }
+
+      /* System Info Metrics */
+      .metric-group {
+        margin-top: 5px;
+      }
+      .metric-title {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+        font-weight: 700;
+      }
+      .metric-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 0;
+        font-size: 0.85rem;
+        font-family: monospace;
+      }
+      .metric-label {
+        color: var(--text-muted);
+      }
+      .metric-value {
+        color: var(--success);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span style="font-weight: 800; font-size: 1.3rem; letter-spacing: -0.03em">⚡ SUPER-PAD ENGINE</span>
+      <div class="theme-selector">
+        <div
+          class="theme-pill"
+          style="background: #38bdf8"
+          onclick="changeTheme('#38bdf8')"></div>
+        <div
+          class="theme-pill"
+          style="background: #10b981"
+          onclick="changeTheme('#10b981')"></div>
+        <div
+          class="theme-pill"
+          style="background: #f59e0b"
+          onclick="changeTheme('#f59e0b')"></div>
+      </div>
+    </header>
+
+    <div class="ticker-wrap">
+      <div class="ticker">
+        <span class="ticker-item">🎵 AUDIO HARDWARE: Web Audio API synthesis engine configured and initialized.</span>
+        <span class="ticker-item">🎛️ OSCILLATOR MODES: Toggle between Sine, Triangle, Square, and Sawtooth filters.</span>
+        <span class="ticker-item">📱 TOUCH NATIVE: Drag across the canvas plane to modulate real-time synth audio frequencies.</span>
+        <!-- Duplicated loop set for layout continuity -->
+        <span class="ticker-item">🎵 AUDIO HARDWARE: Web Audio API synthesis engine configured and initialized.</span>
+        <span class="ticker-item">🎛️ OSCILLATOR MODES: Toggle between Sine, Triangle, Square, and Sawtooth filters.</span>
+        <span class="ticker-item">📱 TOUCH NATIVE: Drag across the canvas plane to modulate real-time synth audio frequencies.</span>
+      </div>
+    </div>
+
+    <main class="main-container">
+      <!-- Host Card Frame -->
+      <div class="card">
+        <h1>
+          Platform:
+          <span
+            class="domain-name"
+            id="domain-display">
+            Domain
+          </span>
+        </h1>
+        <p class="subtitle">Multi-tool sandbox framework hosting advanced dynamic local scripting accessories.</p>
+        <div
+          class="metric-row"
+          style="font-family: inherit; justify-content: center; gap: 8px">
+          <span class="metric-label">System Clock:</span>
+          <span
+            id="current-date"
+            style="color: var(--text-main); font-weight: 500">
+            Loading...
+          </span>
+        </div>
+      </div>
+
+      <!-- XY Oscillator Synth Pad -->
+      <div class="card">
+        <h2>🎛️ XY Oscillator Synth Pad</h2>
+        <p class="subtitle">Tap or drag inside the tracking field. X controls Frequency, Y controls Volume Gain.</p>
+
+        <label
+          class="metric-label"
+          for="osc-type">
+          Oscillator Waveform:
+        </label>
+        <select
+          id="osc-type"
+          onchange="updateWaveform()">
+          <option value="sine">Sine (Smooth / Pure)</option>
+          <option value="triangle">Triangle (Warm / Soft)</option>
+          <option value="sawtooth">Sawtooth (Biting / Retro)</option>
+          <option value="square">Square (Chiptune / Hollow)</option>
+        </select>
+
+        <div
+          class="synth-surface"
+          id="synthPad">
+          <div
+            class="synth-status-overlay"
+            id="synthStatus">
+            TOUCH HERE TO ACTIVATE AUDIO
+            <br />
+            <span style="font-size: 0.75rem; color: var(--accent)">[Move up/down & left/right]</span>
+          </div>
+          <div
+            class="synth-crosshair"
+            id="synthCursor"></div>
+        </div>
+
+        <div
+          class="output-box"
+          id="audio-metrics">
+          Status: Inactive | Freq: 0 Hz | Gain: 0%
+        </div>
+      </div>
+
+      <!-- Performance Diagnostic Card -->
+      <div class="card">
+        <div class="metric-group">
+          <div class="metric-title">Performance Monitor</div>
+          <div class="metric-row">
+            <span class="metric-label">Active Hostname:</span>
+            <span
+              class="metric-value"
+              id="dns-host">
+              -
+            </span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Render Latency:</span>
+            <span
+              class="metric-value"
+              id="perf-load">
+              Calculating...
+            </span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer>&copy; 2026 Dev-Engine Toolbox. Mobile Native Design.</footer>
+
+    <script>
+      // Core Environment Initialization
+      document.addEventListener("DOMContentLoaded", () => {
+        const hostname = window.location.hostname || "superapp.local"
+        document.getElementById("domain-display").textContent = hostname
+        document.getElementById("dns-host").textContent = hostname
+
+        const options = { weekday: "long", year: "numeric", month: "long", day: "numeric" }
+        document.getElementById("current-date").textContent = new Date().toLocaleDateString("en-US", options)
+
+        initSynthPad()
+      })
+
+      function changeTheme(colorCode) {
+        document.documentElement.style.setProperty("--accent", colorCode)
+      }
+
+      // Native Web Audio Synthesizer Logic
+      let audioCtx = null
+      let oscillator = null
+      let gainNode = null
+      let isPlaying = false
+      let selectedWaveform = "sine"
+
+      function initAudioEngine() {
+        if (audioCtx) return
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+
+        gainNode = audioCtx.createGain()
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime)
+        gainNode.connect(audioCtx.destination)
+      }
+
+      function initSynthPad() {
+        const pad = document.getElementById("synthPad")
+        const cursor = document.getElementById("synthCursor")
+        const statusText = document.getElementById("synthStatus")
+        const metrics = document.getElementById("audio-metrics")
+
+        // Draw interior visual structural grids
+        for (let i = 1; i < 5; i++) {
+          let verticalLine = document.createElement("div")
+          verticalLine.className = "synth-grid-line"
+          verticalLine.style.width = "1px"
+          verticalLine.style.height = "100%"
+          verticalLine.style.left = i * 20 + "%"
+          pad.appendChild(verticalLine)
+
+          let horizontalLine = document.createElement("div")
+          horizontalLine.className = "synth-grid-line"
+          horizontalLine.style.height = "1px"
+          horizontalLine.style.width = "100%"
+          horizontalLine.style.top = i * 20 + "%"
+          pad.appendChild(horizontalLine)
+        }
+
+        function startSound(e) {
+          initAudioEngine()
+          if (audioCtx.state === "suspended") {
+            audioCtx.resume()
+          }
+
+          if (!isPlaying) {
+            oscillator = audioCtx.createOscillator()
+            oscillator.type = selectedWaveform
+            oscillator.connect(gainNode)
+            oscillator.start()
+            isPlaying = true
+            statusText.style.display = "none"
+            cursor.style.display = "block"
+          }
+          updateSoundCoordinates(e)
+        }
+
+        function stopSound() {
+          if (isPlaying) {
+            try {
+              oscillator.stop()
+              oscillator.disconnect()
+            } catch (e) {}
+            oscillator = null
+            isPlaying = false
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime)
+            statusText.style.display = "block"
+            cursor.style.display = "none"
+            metrics.textContent = `Status: Inactive | Freq: 0 Hz | Gain: 0%`
+          }
+        }
+
+        function updateSoundCoordinates(e) {
+          if (!isPlaying) return
+
+          const rect = pad.getBoundingClientRect()
+          const clientX = e.touches ? e.touches[0].clientX : e.clientX
+          const clientY = e.touches ? e.touches[0].clientY : e.clientY
+
+          let x = clientX - rect.left
+          let y = clientY - rect.top
+
+          x = Math.max(0, Math.min(x, rect.width))
+          y = Math.max(0, Math.min(y, rect.height))
+
+          cursor.style.left = x + "px"
+          cursor.style.top = y + "px"
+
+          const freqPercent = x / rect.width
+          const frequency = Math.round(120 + Math.pow(10, freqPercent * 1) * 100)
+
+          const gainPercent = 1 - y / rect.height
+          const targetedGain = Math.min(0.25, gainPercent * 0.25)
+
+          if (oscillator) {
+            oscillator.frequency.setTargetAtTime(frequency, audioCtx.currentTime, 0.03)
+          }
+          if (gainNode) {
+            gainNode.gain.setTargetAtTime(targetedGain, audioCtx.currentTime, 0.03)
+          }
+
+          metrics.textContent = `Status: Playing | Freq: ${frequency} Hz | Gain: ${Math.round(gainPercent * 100)}%`
+        }
+
+        // Desktop Mouse Triggers
+        pad.addEventListener("mousedown", startSound)
+        window.addEventListener("mouseup", stopSound)
+        pad.addEventListener("mousemove", updateSoundCoordinates)
+
+        // Responsive Mobile Touch Triggers
+        pad.addEventListener(
+          "touchstart",
+          (e) => {
+            e.preventDefault()
+            startSound(e)
+          },
+          { passive: false }
+        )
+        window.addEventListener("touchend", stopSound)
+        pad.addEventListener(
+          "touchmove",
+          (e) => {
+            e.preventDefault()
+            updateSoundCoordinates(e)
+          },
+          { passive: false }
+        )
+      }
+
+      function updateWaveform() {
+        selectedWaveform = document.getElementById("osc-type").value
+        if (oscillator && isPlaying) {
+          oscillator.type = selectedWaveform
+        }
+      }
+
+      // Performance Execution Metrics
+      window.addEventListener("load", () => {
+        setTimeout(() => {
+          const [nav] = performance.getEntriesByType("navigation")
+          document.getElementById("perf-load").textContent = nav ? `${(nav.loadEventEnd - nav.startTime).toFixed(0)} ms` : "N/A"
+        }, 0)
+      })
+    </script>
+  </body>
+</html>

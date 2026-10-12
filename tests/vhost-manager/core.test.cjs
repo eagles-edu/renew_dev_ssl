@@ -14,6 +14,13 @@ test("GeoIP country output parser accepts country editions and ignores unknown r
   assert.equal(security.parseGeoIpCountry(""), null)
 })
 
+test("permanent web ban state accepts IPv4 and IPv6 and ignores malformed entries", () => {
+  assert.deepEqual(
+    [...security.parsePermanentBanLines("91.92.40.188\n2001:db8::1\ninvalid\n")].sort(),
+    ["2001:db8::1", "91.92.40.188"]
+  )
+})
+
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vhost-manager-"))
   const config = core.configFromEnv({
@@ -105,14 +112,18 @@ test("validates domain names and derives stable per-site accounts", () => {
   )
   assert.equal(
     core.accountForDomain("sub.example.com", new Date("2026-10-08T00:00:00Z")),
-    "subeexample_com1026"
+    "subcom1026"
   )
   assert.equal(
     core.accountForDomain("eaglesvn.club", new Date("2026-10-08T00:00:00Z")),
     "eaglclub1026"
   )
+  assert.equal(
+    core.accountForDomain("obgyn.eaglesvn.club", new Date("2026-10-08T00:00:00Z")),
+    "obgyclub1026"
+  )
   assert.throws(
-    () => core.accountForDomain("a.example.abcdefghijklmnopqrstuvwxyz0123456789abcdef.com"),
+    () => core.accountForDomain("a.example.abcdefghijklmnopqrstuvwxyz0123456789abcdef"),
     /32-character limit/
   )
 })
@@ -186,12 +197,13 @@ test("renderer merges MIME mappings and emits configurable security and cache di
     {
       cspMode: "report-only",
       cspPolicy:
-        "default-src 'self'; object-src 'none'; img-src 'self' data: blob: https://cdn.example.test",
+        "default-src 'self'; object-src 'none'; img-src 'self' data: blob: https://cdn.example.test; upgrade-insecure-requests",
       mimeOverrides: ["application/wasm wasm"],
       staticCache: "30d",
     }
   )
   assert.match(rendered.production, /Content-Security-Policy-Report-Only/)
+  assert.doesNotMatch(rendered.production, /upgrade-insecure-requests/)
   assert.match(rendered.production, /application\/javascript js;/)
   assert.match(rendered.production, /application\/wasm wasm;/)
   assert.match(rendered.production, /expires 30d;/)
@@ -226,6 +238,23 @@ test("accepts pasted aliases and detects collisions with the default www alias",
     core.inventory(f.config)
   )
   assert.deepEqual(plan.settings.aliases, ["www.other.example.test", "assets.other.example.test"])
+})
+
+test("new OLS sites map every hostname and use the navigable EaglesVN starter page", (t) => {
+  const f = fixture()
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }))
+  const domain = "new.example.test"
+  const alias = `www.${domain}`
+  const plan = core.sitePlan(f.config, { domain }, core.inventory(f.config))
+  const olsMain = plan.files.find((file) => file.path === f.config.olsMain)
+  const index = plan.files.find((file) => file.path.endsWith("/public_html/index.html"))
+  const favicon = plan.files.find((file) => file.path.endsWith("/public_html/favicon.svg"))
+
+  assert.match(olsMain.after, new RegExp(`map ${domain} ${domain}, ${alias}`))
+  assert.match(index.after, /Real-time Connection Metrics/)
+  assert.match(index.after, /window\.location\.hostname/)
+  assert.match(index.after, /href="\/favicon\.svg"/)
+  assert.match(favicon.after, /<svg[\s>]/)
 })
 
 test("reset preview and apply preserve phpMyAdmin paths and nonempty directories", (t) => {
@@ -384,7 +413,11 @@ test("site preview and rollback use fixture paths and preserve reviewed file con
   )
   assert.match(
     plan.files.find((item) => item.path.endsWith("index.html")).after,
-    /<title>new\.example\.test<\/title>/
+    /<title>Domain Parked \| Welcome<\/title>/
+  )
+  assert.match(
+    plan.files.find((item) => item.path.endsWith("index.html")).after,
+    /window\.location\.hostname/
   )
   assert.equal(
     plan.files.some((item) => /{{[A-Z0-9_]+}}/.test(item.after)),

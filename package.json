@@ -10,6 +10,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
+    "docs:oneshield-viewer": "node scripts/render-oneshield-viewer.mjs && prettier docs/oneshield-request-flows.html --write",
     "test": "playwright test",
     "test:strict": "PLAYWRIGHT_REQUIRE_SECURITY_HEADERS=1 playwright test",
     "test:debug": "PWDEBUG=1 playwright test --ui",

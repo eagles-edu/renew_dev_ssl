@@ -1,0 +1,13 @@
+[Unit]
+Description=Persist CrowdSec web attack bans in nftables and Nginx
+After=local-fs.target crowdsec.service nginx.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/renew-ssl-permanent-web-attack-bans.py
+TimeoutStartSec=60s
+
+[Install]
+WantedBy=multi-user.target

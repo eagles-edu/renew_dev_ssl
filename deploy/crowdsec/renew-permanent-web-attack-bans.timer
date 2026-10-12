@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh permanent web attack bans from CrowdSec alerts
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=2s
+Persistent=true
+Unit=renew-permanent-web-attack-bans.service
+
+[Install]
+WantedBy=timers.target

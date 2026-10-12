@@ -44,5 +44,7 @@
     "SOA",
     "UDP",
     "vhost"
-  ]
+  ],
+  "curatormdStatus.profile": "renew-ssl-coding",
+  "curatormdStatus.pollSeconds": 25
 }

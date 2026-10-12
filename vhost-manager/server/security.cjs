@@ -321,18 +321,28 @@ function crowdsecAcquisitionConfigs(config) {
   })
 }
 
-function permanentSshBans(config) {
-  if (config.testMode) return new Set()
+function parsePermanentBanLines(value) {
+  return new Set(
+    String(value || "")
+      .split(/\r?\n/)
+      .map(normalizeIp)
+      .filter(Boolean)
+  )
+}
+
+function readPermanentBanFile(file) {
   try {
-    return new Set(
-      fs
-        .readFileSync("/var/lib/crowdsec/permanent-ssh-bans.txt", "utf8")
-        .split(/\r?\n/)
-        .map(normalizeIp)
-        .filter(Boolean)
-    )
+    return parsePermanentBanLines(fs.readFileSync(file, "utf8"))
   } catch {
     return new Set()
+  }
+}
+
+function permanentBanFiles(config) {
+  if (config.testMode) return { ssh: new Set(), web: new Set() }
+  return {
+    ssh: readPermanentBanFile("/var/lib/crowdsec/permanent-ssh-bans.txt"),
+    web: readPermanentBanFile("/var/lib/crowdsec/permanent-web-attack-bans.txt"),
   }
 }
 
@@ -439,8 +449,12 @@ function collect(config, now) {
     }
     blocks.set(ip, entry)
   }
-  const permanentBans = permanentSshBans(config)
-  for (const ip of permanentBans) {
+  const permanentBanLists = permanentBanFiles(config)
+  const permanentBans = new Map([
+    ...[...permanentBanLists.ssh].map((ip) => [ip, "Permanent SSH brute-force ban"]),
+    ...[...permanentBanLists.web].map((ip) => [ip, "Permanent web attack ban"]),
+  ])
+  for (const [ip, reason] of permanentBans) {
     const entry = blocks.get(ip) || {
       ip,
       countryCode: null,
@@ -456,7 +470,7 @@ function collect(config, now) {
       ...entry,
       blocked: true,
       permanent: true,
-      scenario: "Permanent SSH brute-force ban",
+      scenario: reason,
     })
   }
   for (const [ip, blocked] of blocks) {
@@ -584,7 +598,10 @@ function collect(config, now) {
       ssh: {
         available: ssh.available,
         acquisitionConfiguredInCrowdSec: sshAcquisitionConfigured,
-        permanentBanCount: permanentBans.size,
+        permanentBanCount: permanentBanLists.ssh.size,
+      },
+      web: {
+        permanentBanCount: permanentBanLists.web.size,
       },
       crowdsec: {
         available: metrics.available && decisionsResult.available,
@@ -621,4 +638,5 @@ module.exports = {
   parseGeoIpCountry,
   scanNginxLogs,
   securitySnapshot,
+  parsePermanentBanLines,
 }
