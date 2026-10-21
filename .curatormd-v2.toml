@@ -1,0 +1,20 @@
+schema_version = 1
+backend_api_version = 1
+project_id = "vhost-manager-alpha"
+
+[scope]
+read_paths = ["vhost-manager", "docs"]
+
+[checklists]
+
+[evidence]
+adapters = []
+
+[actions]
+adapters = []
+
+[staging]
+root = ".curatormd-v2/staging"
+
+[persistence]
+targets = [".curatormd-v2/persistence/HISTORY.md", ".curatormd-v2/persistence/LESSONS-LEARNED.md"]

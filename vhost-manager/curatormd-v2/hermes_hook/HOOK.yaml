@@ -1,0 +1,9 @@
+name: curator-v2
+description: Bind explicit Vhost Manager goals and route bounded Codex lifecycle events to Curator V2.
+events:
+  - agent:start
+  - codex:turn:start
+  - codex:turn:end
+durable_events:
+  - codex:turn:start
+  - codex:turn:end
