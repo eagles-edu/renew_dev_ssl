@@ -758,13 +758,12 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
     def test_vhost_hook_delivers_through_installed_mcp_and_acknowledges_receipt(self) -> None:
         """Exercise the consumer hook, installed launcher, and durable receipt together."""
 
-        project_root = Path(__file__).resolve().parents[2]
-        config = ProjectConfig.load(project_root)
+        source_root = Path(__file__).resolve().parents[2]
         profile_id = "vhost-manager-alpha-e2e-test"
         session_id = "vhost-alpha-e2e-session"
         goal_id = "vhost-alpha-e2e-goal"
         hook_path = (
-            project_root
+            source_root
             / "vhost-manager"
             / "curatormd-v2"
             / "hermes_hook"
@@ -778,6 +777,32 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
         spec.loader.exec_module(module)
 
         with tempfile.TemporaryDirectory(prefix="vhost-curator-v2-hook-e2e-") as temp:
+            project_root = Path(temp) / "consumer"
+            for relative in ("docs", "vhost-manager"):
+                (project_root / relative).mkdir(parents=True)
+            subprocess.run(
+                ["git", "init", "--quiet", str(project_root)],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            config_path = project_root / ".curatormd-v2.toml"
+            config_path.write_bytes(
+                (source_root / ".curatormd-v2.toml").read_bytes()
+            )
+            config_path.chmod(0o600)
+            for target_relative in (
+                ".curatormd-v2/persistence/HISTORY.md",
+                ".curatormd-v2/persistence/LESSONS-LEARNED.md",
+            ):
+                target = project_root / target_relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# Disposable Vhost alpha record\n", encoding="utf-8")
+            (project_root / ".curatormd-v2" / "staging").mkdir(parents=True)
+            out_of_scope = project_root / "persistence" / "HISTORY.md"
+            out_of_scope.parent.mkdir(parents=True)
+            out_of_scope.write_text("# Must remain unchanged\n", encoding="utf-8")
+            config = ProjectConfig.load(project_root)
             database = Path(temp) / "curator-v2.sqlite3"
             store = CuratorStore(database)
             try:
@@ -1019,6 +1044,29 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
                     self.assertNotIn(
                         b"VHOST_FAILURE_CANARY_MUST_NOT_PERSIST", contents, str(path)
                     )
+
+            store = CuratorStore(database)
+            try:
+                plugin = ProjectPlugin.bind(config, store)
+                target_relative = config.persistence_targets[0]
+                persisted = plugin.persist_goal(goal_id, target_relative)
+                self.assertEqual(persisted.target, project_root / target_relative)
+                reconciled = plugin.reconcile_goal(goal_id, target_relative)
+                self.assertEqual(reconciled.status, "synced")
+            finally:
+                store.close()
+
+            projection = (project_root / target_relative).read_text(encoding="utf-8")
+            self.assertIn(r"vhost\-alpha\-e2e\-goal", projection)
+            self.assertIn("Codex turn started for the explicitly bound goal", projection)
+            self.assertIn("Codex turn ended normally", projection)
+            self.assertNotIn(prompt_canary, projection)
+            self.assertNotIn(response_canary, projection)
+            self.assertNotIn("VHOST_FAILURE_CANARY_MUST_NOT_PERSIST", projection)
+            self.assertEqual(
+                out_of_scope.read_text(encoding="utf-8"),
+                "# Must remain unchanged\n",
+            )
 
 
 if __name__ == "__main__":
