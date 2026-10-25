@@ -84,6 +84,7 @@ function configFromEnv(env = process.env) {
       homeRoot: path.join(root, "home"),
       nginxBinary: "/bin/true",
       olsBinary: "/bin/true",
+      testFailApplyDomain: env.VHOST_MANAGER_TEST_FAIL_APPLY_DOMAIN || "",
       testMode: true,
     }
   }

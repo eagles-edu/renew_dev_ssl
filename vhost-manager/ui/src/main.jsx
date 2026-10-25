@@ -460,7 +460,7 @@ function App() {
       }))
       await refresh()
       setMessage(
-        `${result.filesArchived} example config paths saved to ${result.archivePath}. Active configs were not changed.`
+        `${result.filesArchived} example config paths saved to ${result.archivePath}. Active configs were not changed. ${result.curatorV2?.status === "received" ? `Curator V2 receipt saved (${result.curatorV2.event_id}).` : "Curator V2 receipt is pending; retry it from Recent activity."}`
       )
     } catch (error) {
       setMessage(error.message)
@@ -496,10 +496,14 @@ function App() {
       setPlan(null)
       setConfirmation("")
       await refresh()
-      setMessage(
+      const appliedMessage =
         plan.kind === "adopt"
           ? "Configuration recorded; server files were unchanged."
           : "Changes applied and both services validated."
+      setMessage(
+        result.curatorV2?.status === "received"
+          ? `${appliedMessage} Curator V2 receipt saved (${result.curatorV2.event_id}).`
+          : `${appliedMessage} Curator V2 receipt is pending; retry it from Recent activity.`
       )
     } catch (error) {
       setMessage(error.message)
@@ -512,9 +516,30 @@ function App() {
     if (!window.confirm("Roll back this operation from its root-only backup?")) return
     setBusy(true)
     try {
-      await request("rollback", { operationId })
+      const result = await request("rollback", { operationId })
       await refresh()
-      setMessage("Rollback completed and service checks passed.")
+      setMessage(
+        result.curatorV2?.status === "received"
+          ? `Rollback completed and validated. Curator V2 receipt saved (${result.curatorV2.event_id}).`
+          : "Rollback completed and validated. Curator V2 receipt is pending; retry it from Recent activity."
+      )
+    } catch (error) {
+      setMessage(error.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function retryCuratorV2(operationId) {
+    setBusy(true)
+    try {
+      const result = await request("curator/retry", { operationId })
+      await refresh()
+      setMessage(
+        result.curatorV2?.status === "received"
+          ? `Curator V2 receipt saved (${result.curatorV2.event_id}).`
+          : "Curator V2 is still unavailable; the operation remains pending."
+      )
     } catch (error) {
       setMessage(error.message)
     } finally {
@@ -2458,13 +2483,31 @@ function App() {
               </small>
             </form>
             {sslJob.status !== "running" && sslJob.status !== "starting" && (
-              <div className={`ssl-job-result ${sslJob.status}`}>
-                {sslJob.status === "completed"
-                  ? sites.find((site) => site.domain === sslJob.domain)?.tlsReady
-                    ? "SSL OK. The expiry date is now shown beside the pill."
-                    : "The script completed, but no valid certificate was detected yet. Review the terminal output."
-                  : `Renewal stopped with exit code ${sslJob.exitCode ?? "unknown"}. Review the terminal output and correct the reported issue.`}
-              </div>
+              <>
+                <div className={`ssl-job-result ${sslJob.status}`}>
+                  {sslJob.status === "completed"
+                    ? sites.find((site) => site.domain === sslJob.domain)?.tlsReady
+                      ? "SSL OK. The expiry date is now shown beside the pill."
+                      : "The script completed, but no valid certificate was detected yet. Review the terminal output."
+                    : `Renewal stopped with exit code ${sslJob.exitCode ?? "unknown"}. Review the terminal output and correct the reported issue.`}
+                </div>
+                {sslJob.curatorV2 && (
+                  <div className="ssl-job-result">
+                    Curator V2 receipt:{" "}
+                    {sslJob.curatorV2.status === "received" ? "saved." : "pending."}{" "}
+                    {sslJob.curatorV2.status === "pending" && (
+                      <button
+                        className="button secondary compact"
+                        onClick={async () => {
+                          await refresh()
+                          setModal("history")
+                        }}>
+                        Open activity log to retry
+                      </button>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </section>
         </div>
@@ -2505,7 +2548,21 @@ function App() {
                       {item.state}
                     </span>
                     <code>{item.backup}</code>
+                    {item.curatorV2 && (
+                      <span>
+                        Curator V2: {item.curatorV2.status}
+                        {item.curatorV2.event_id ? ` · ${item.curatorV2.event_id}` : ""}
+                      </span>
+                    )}
                   </div>
+                  {item.curatorV2?.status === "pending" && (
+                    <button
+                      className="button secondary compact"
+                      disabled={busy}
+                      onClick={() => retryCuratorV2(item.id)}>
+                      Retry Curator V2
+                    </button>
+                  )}
                   {item.rollbackAvailable && (
                     <button
                       className="button secondary compact"

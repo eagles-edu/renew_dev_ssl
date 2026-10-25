@@ -80,6 +80,133 @@ function storePlan(plan) {
   return plan
 }
 
+function curatorV2Receipt(operation) {
+  const required = [
+    "CURATOR_V2_BRIDGE_PYTHON",
+    "CURATOR_V2_MCP_COMMAND",
+    "CURATOR_V2_DATABASE",
+    "CURATOR_V2_PROJECT_ROOT",
+    "CURATOR_V2_PROFILE_ID",
+    "CURATOR_V2_UID",
+    "CURATOR_V2_GID",
+    "CURATOR_V2_HOME",
+  ]
+  if (required.some((name) => !process.env[name]))
+    return { status: "pending", reason: "not_configured" }
+  const uid = Number(process.env.CURATOR_V2_UID)
+  const gid = Number(process.env.CURATOR_V2_GID)
+  if (!Number.isInteger(uid) || uid < 1 || !Number.isInteger(gid) || gid < 1)
+    return { status: "pending", reason: "invalid_host_identity" }
+  if (
+    [
+      process.env.CURATOR_V2_BRIDGE_PYTHON,
+      process.env.CURATOR_V2_MCP_COMMAND,
+      process.env.CURATOR_V2_DATABASE,
+      process.env.CURATOR_V2_PROJECT_ROOT,
+      process.env.CURATOR_V2_HOME,
+    ].some((value) => !path.isAbsolute(value))
+  )
+    return { status: "pending", reason: "invalid_host_configuration" }
+
+  const helper = path.join(__dirname, "../curatormd-v2/apply_bridge.py")
+  const result = spawnSync(process.env.CURATOR_V2_BRIDGE_PYTHON, [helper], {
+    cwd: process.env.CURATOR_V2_PROJECT_ROOT,
+    env: {
+      PATH: process.env.PATH || "/usr/bin:/bin",
+      HOME: process.env.CURATOR_V2_HOME,
+      CURATOR_V2_MCP_COMMAND: process.env.CURATOR_V2_MCP_COMMAND,
+      CURATOR_V2_DATABASE: process.env.CURATOR_V2_DATABASE,
+      CURATOR_V2_PROJECT_ROOT: process.env.CURATOR_V2_PROJECT_ROOT,
+      CURATOR_V2_PROFILE_ID: process.env.CURATOR_V2_PROFILE_ID,
+    },
+    uid,
+    gid,
+    encoding: "utf8",
+    input: JSON.stringify({
+      operation: {
+        id: operation.id,
+        kind: operation.kind,
+        title: operation.title,
+        domain: operation.domain,
+        state: operation.state,
+        producerId: operation.producerId,
+        exitCode: operation.exitCode,
+      },
+    }),
+    timeout: 20_000,
+    maxBuffer: 64 * 1024,
+  })
+  if (result.status !== 0 || result.error) {
+    const bridgeErrorType = String(result.stderr || "").trim()
+    return {
+      status: "pending",
+      reason: "curator_unavailable",
+      ...(/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(bridgeErrorType) ? { bridgeErrorType } : {}),
+    }
+  }
+  try {
+    const response = JSON.parse(result.stdout)
+    const receipt = response.receipt
+    const eventPrefix =
+      operation.kind === "rollback"
+        ? "vhost-rollback-"
+        : operation.kind === "archive"
+          ? "vhost-archive-"
+          : operation.kind === "ssl-renew"
+            ? "vhost-ssl-renew-"
+            : operation.kind === "ssl-cron"
+              ? "vhost-ssl-cron-"
+              : operation.kind === "script"
+                ? "vhost-script-"
+                : "vhost-apply-"
+    const expectedEventId = `${eventPrefix}${operation.id}`
+    if (
+      receipt?.project_id === "vhost-manager-alpha" &&
+      receipt?.event_id === expectedEventId &&
+      ["processed", "duplicate"].includes(receipt.status)
+    )
+      return {
+        ...receipt,
+        status: "received",
+        receipt_status: receipt.status,
+      }
+  } catch {
+    // A malformed helper response is not a durable Curator receipt.
+  }
+  return { status: "pending", reason: "receipt_unverified" }
+}
+
+function submitCuratorV2(operation) {
+  const receipt = curatorV2Receipt(operation)
+  return (
+    ops.recordCuratorV2(config, operation.id, receipt) || {
+      ...operation,
+      curatorV2: receipt,
+    }
+  )
+}
+
+function finishSslJob(id, status, exitCode) {
+  if (!sslJob || sslJob.id !== id || sslJob.finishedAt) return
+  sslJob.status = status
+  sslJob.exitCode = exitCode
+  sslJob.finishedAt = new Date().toISOString()
+  sslJob.process = null
+  const operation = ops.recordOperation(config, {
+    id,
+    kind: "ssl-renew",
+    title: "Renew SSL certificate",
+    domain: sslJob.domain,
+    at: sslJob.startedAt,
+    finishedAt: sslJob.finishedAt,
+    rollbackAvailable: false,
+    state: status,
+    exitCode,
+  })
+  const updated = submitCuratorV2(operation)
+  sslJob.curatorV2 = updated.curatorV2
+}
+
 function api(req, res, url) {
   if (!loopback(req.socket.remoteAddress)) return send(res, 403, { error: "Loopback access only." })
   const host = String(req.headers.host || "")
@@ -131,7 +258,7 @@ function api(req, res, url) {
   )
     return send(res, 403, { error: "Request origin or CSRF token is invalid." })
   return body(req)
-    .then((input) => {
+    .then(async (input) => {
       if (url.pathname === "/api/ssl-renew") {
         const domain = String(input.domain || "")
           .trim()
@@ -149,16 +276,84 @@ function api(req, res, url) {
           })
         if (site.tlsReady)
           return send(res, 409, { error: `${domain} already has a valid certificate.` })
-        if (config.testMode)
-          return send(res, 501, { error: "SSL renewal is disabled in test mode." })
+
+        if (config.testMode) {
+          const simulatedStatus =
+            input.testOutcome ||
+            (process.env.VHOST_MANAGER_TEST_SSL_RENEWAL === "vary"
+              ? undefined
+              : process.env.VHOST_MANAGER_TEST_SSL_RENEWAL)
+          if (!["completed", "failed", "interrupted", "running"].includes(simulatedStatus))
+            return send(res, 501, { error: "SSL renewal is disabled in test mode." })
+          const id = crypto.randomUUID()
+          const startedAt = new Date().toISOString()
+          if (simulatedStatus === "running") {
+            sslJob = {
+              id,
+              domain,
+              status: "running",
+              output: "Test mode: in-progress certificate renewal simulated.\n",
+              startedAt,
+              exitCode: null,
+              process: null,
+            }
+            ops.recordOperation(config, {
+              id,
+              kind: "ssl-renew",
+              title: "Renew SSL certificate",
+              domain,
+              at: startedAt,
+              rollbackAvailable: false,
+              state: "running",
+              exitCode: null,
+            })
+            return send(res, 202, { job: publicSslJob(sslJob) })
+          }
+          sslJob = {
+            id,
+            domain,
+            status: simulatedStatus,
+            output: "Test mode: certificate renewal result simulated.\n",
+            startedAt,
+            finishedAt: new Date().toISOString(),
+            exitCode:
+              simulatedStatus === "completed" ? 0 : simulatedStatus === "interrupted" ? 143 : 1,
+            process: null,
+          }
+          const operation = ops.recordOperation(config, {
+            id,
+            kind: "ssl-renew",
+            title: "Renew SSL certificate",
+            domain,
+            at: sslJob.startedAt,
+            finishedAt: sslJob.finishedAt,
+            rollbackAvailable: false,
+            state: simulatedStatus,
+            exitCode: sslJob.exitCode,
+          })
+          const updated = submitCuratorV2(operation)
+          sslJob.curatorV2 = updated.curatorV2
+          return send(res, 202, { job: publicSslJob(sslJob) })
+        }
 
         const id = crypto.randomUUID()
+        const startedAt = new Date().toISOString()
+        ops.recordOperation(config, {
+          id,
+          kind: "ssl-renew",
+          title: "Renew SSL certificate",
+          domain,
+          at: startedAt,
+          rollbackAvailable: false,
+          state: "running",
+          exitCode: null,
+        })
         sslJob = {
           id,
           domain,
           status: "running",
           output: "Entering root login shell with sudo -i…\n",
-          startedAt: new Date().toISOString(),
+          startedAt,
           exitCode: null,
           process: null,
         }
@@ -180,23 +375,16 @@ function api(req, res, url) {
           child.stderr.on("data", (chunk) => addJobOutput(sslJob, chunk.toString("utf8")))
           child.on("error", (error) => {
             addJobOutput(sslJob, `\nCould not start SSL renewal: ${error.message}\n`)
-            sslJob.status = "failed"
-            sslJob.exitCode = 1
-            sslJob.finishedAt = new Date().toISOString()
-            sslJob.process = null
+            finishSslJob(id, "failed", 1)
           })
-          child.on("close", (code) => {
-            if (sslJob?.id !== id) return
-            sslJob.status = code === 0 ? "completed" : "failed"
-            sslJob.exitCode = code
-            sslJob.finishedAt = new Date().toISOString()
-            sslJob.process = null
+          child.on("close", (code, signal) => {
+            const interrupted = signal !== null || [130, 143].includes(code)
+            const status = interrupted ? "interrupted" : code === 0 ? "completed" : "failed"
+            finishSslJob(id, status, code ?? (signal === "SIGINT" ? 130 : 143))
           })
         } catch (error) {
-          sslJob.status = "failed"
-          sslJob.exitCode = 1
-          sslJob.finishedAt = new Date().toISOString()
           addJobOutput(sslJob, `Could not start SSL renewal: ${error.message}\n`)
+          finishSslJob(id, "failed", 1)
         }
         return send(res, 202, { job: publicSslJob(sslJob) })
       }
@@ -208,6 +396,82 @@ function api(req, res, url) {
           return send(res, 400, { error: "Enter one response of at most 2,000 characters." })
         sslJob.process.stdin.write(`${text}\n`)
         return send(res, 202, { accepted: true })
+      }
+      if (url.pathname === "/api/ssl-cron-result") {
+        if (!config.testMode && process.getuid?.() !== 0)
+          return send(res, 403, {
+            error: "Scheduled SSL renewal requires the root Vhost Manager service.",
+          })
+        const operationId = input.operationId
+        const exitCode = input.exitCode
+        if (
+          typeof operationId !== "string" ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)
+        )
+          return send(res, 400, { error: "A valid renewal operation ID is required." })
+        if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)
+          return send(res, 400, { error: "A valid ACME exit code is required." })
+        const at = new Date().toISOString()
+        const operation = ops.recordOperation(config, {
+          id: operationId,
+          kind: "ssl-cron",
+          title: "Scheduled ACME renewal",
+          at,
+          finishedAt: at,
+          rollbackAvailable: false,
+          state: exitCode === 0 ? "completed" : "failed",
+          exitCode,
+        })
+        const updated = submitCuratorV2(operation)
+        return send(res, 202, { operation: updated, curatorV2: updated.curatorV2 })
+      }
+      if (url.pathname === "/api/script-result") {
+        if (!config.testMode && process.getuid?.() !== 0)
+          return send(res, 403, {
+            error: "Standalone utility receipts require the root Vhost Manager service.",
+          })
+        const operationId = input.operationId
+        const producerId = input.producerId
+        const exitCode = input.exitCode
+        const producers = {
+          manual_dns_renewal: "Manual DNS certificate renewal",
+          domain_batch_renewal: "Domain batch renewal",
+          domain_inventory_refresh: "Domain inventory refresh",
+          nginx_vhost_setup: "Nginx vhost setup",
+        }
+        if (
+          typeof operationId !== "string" ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)
+        )
+          return send(res, 400, { error: "A valid standalone operation ID is required." })
+        if (!Object.hasOwn(producers, producerId))
+          return send(res, 400, { error: "Choose a known standalone producer." })
+        if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)
+          return send(res, 400, { error: "A valid utility exit code is required." })
+        const existing = ops.history(config).find((item) => item.id === operationId)
+        if (
+          existing &&
+          (existing.kind !== "script" ||
+            existing.producerId !== producerId ||
+            existing.exitCode !== exitCode)
+        )
+          return send(res, 409, {
+            error: "This operation ID is already bound to a different result.",
+          })
+        const at = new Date().toISOString()
+        const operation = ops.recordOperation(config, {
+          id: operationId,
+          kind: "script",
+          producerId,
+          title: producers[producerId],
+          at,
+          finishedAt: at,
+          rollbackAvailable: false,
+          state: exitCode === 0 ? "completed" : "failed",
+          exitCode,
+        })
+        const updated = submitCuratorV2(operation)
+        return send(res, 202, { operation: updated, curatorV2: updated.curatorV2 })
       }
       if (url.pathname === "/api/scan")
         return send(res, 200, { inventory: scan(), services: ops.serviceState(config) })
@@ -244,7 +508,9 @@ function api(req, res, url) {
         const plan = plans.get(input.planId)
         if (!plan || plan.expiresAt < Date.now())
           return send(res, 410, { error: "This review expired. Rescan and preview again." })
-        return send(res, 200, ops.archiveExamples(plan, config))
+        const result = ops.archiveExamples(plan, config)
+        const operation = submitCuratorV2(result.operation)
+        return send(res, 200, { ...result, operation, curatorV2: operation.curatorV2 })
       }
       if (url.pathname === "/api/plan/site")
         return send(res, 200, {
@@ -266,15 +532,74 @@ function api(req, res, url) {
           return send(res, 410, { error: "This preview expired. Rescan and review a new plan." })
         if (input.confirmation !== plan.confirmation)
           return send(res, 400, { error: "Confirmation text does not match the preview." })
-        const result = ops.applyPlan(plan, config)
+        let result
+        try {
+          result = ops.applyPlan(plan, config)
+        } catch (error) {
+          plans.delete(plan.id)
+          const failed = ops
+            .history(config)
+            .find((entry) => entry.id === plan.id && entry.state === "failed")
+          if (!failed) throw error
+          const operation = submitCuratorV2(failed)
+          return send(res, 400, {
+            error: error.message || "Apply failed.",
+            operation,
+            curatorV2: operation.curatorV2,
+          })
+        }
         plans.delete(plan.id)
-        return send(res, 200, { ...result, inventory: scan() })
-      }
-      if (url.pathname === "/api/rollback")
+        const operation = submitCuratorV2(result.operation)
         return send(res, 200, {
-          ...ops.rollbackOperation(input.operationId, config),
+          ...result,
+          operation,
+          curatorV2: operation.curatorV2,
           inventory: scan(),
         })
+      }
+      if (url.pathname === "/api/curator/retry") {
+        const operation = ops.history(config).find((entry) => entry.id === input.operationId)
+        const completed =
+          (operation &&
+            ["site", "reset", "toggle", "adopt"].includes(operation.kind) &&
+            ["applied", "failed"].includes(operation.state)) ||
+          (operation?.kind === "ssl-renew" &&
+            ["completed", "failed", "interrupted"].includes(operation.state)) ||
+          (operation?.kind === "ssl-cron" && ["completed", "failed"].includes(operation.state)) ||
+          (operation?.kind === "script" && ["completed", "failed"].includes(operation.state)) ||
+          (operation?.kind === "rollback" && ["complete", "failed"].includes(operation.state)) ||
+          (operation?.kind === "archive" && operation.state === "archived")
+        if (!operation || !completed)
+          return send(res, 404, { error: "Completed operation not found." })
+        if (operation.curatorV2?.status === "received")
+          return send(res, 200, { operation, curatorV2: operation.curatorV2 })
+        if (operation.curatorV2?.status !== "pending")
+          return send(res, 409, { error: "This operation has no pending Curator V2 receipt." })
+        const updated = submitCuratorV2(operation)
+        return send(res, 200, { operation: updated, curatorV2: updated.curatorV2 })
+      }
+      if (url.pathname === "/api/rollback") {
+        let result
+        try {
+          result = ops.rollbackOperation(input.operationId, config)
+        } catch (error) {
+          const failedAttempt = ops.recordFailedRollback(input.operationId, config)
+          if (!failedAttempt) throw error
+          const rollback = submitCuratorV2(failedAttempt)
+          return send(res, 400, {
+            error: error.message || "Rollback failed.",
+            rollback,
+            curatorV2: rollback.curatorV2,
+          })
+        }
+        const rollback = submitCuratorV2(result.rollback)
+        return send(res, 200, {
+          ...result,
+          rollback,
+          curatorV2: rollback.curatorV2,
+          inventory: scan(),
+        })
+      }
       return send(res, 404, { error: "Not found." })
     })
     .catch((error) => send(res, 400, { error: error.message || "Request failed." }))
@@ -316,6 +641,7 @@ const server = http.createServer((req, res) => {
 const port = Number(process.env.VHOST_MANAGER_PORT || 4310)
 try {
   ops.ensureRoot(config)
+  for (const operation of ops.recoverInterruptedSslRenewals(config)) submitCuratorV2(operation)
 } catch (error) {
   process.stderr.write(`${error.message}\n`)
   process.exit(1)

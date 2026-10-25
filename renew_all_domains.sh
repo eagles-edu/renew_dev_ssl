@@ -41,10 +41,19 @@ DRY_RUN="no"
 CONTINUE_ON_FAILURE="no"
 RESET_PROGRESS="no"
 DUE_ONLY="yes"
+RESULT_OPERATION_ID=""
+SCRIPT_RESULT_BRIDGE="${SCRIPT_DIR}/vhost-manager/curatormd-v2/script_result_bridge.py"
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+record_batch_result() {
+  local exit_status="${1:-$?}"
+  [ -n "$RESULT_OPERATION_ID" ] || return 0
+  python3 "$SCRIPT_RESULT_BRIDGE" domain_batch_renewal "$RESULT_OPERATION_ID" "$exit_status" || \
+    printf 'WARNING: Curator receipt was not confirmed; check the Vhost result queue.\n' >&2
 }
 
 usage() {
@@ -351,6 +360,8 @@ main() {
     y|yes) ;;
     *) printf 'Cancelled.\n'; exit 0 ;;
   esac
+  RESULT_OPERATION_ID="$(cat /proc/sys/kernel/random/uuid)"
+  trap 'record_batch_result "$?"' EXIT
 
   for inventory_mode_record in "${records[@]}"; do
     position=$((position + 1))

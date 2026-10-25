@@ -17,6 +17,8 @@
 set -euo pipefail
 umask 077
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # ---------- Config (override ACME paths through the environment) ----------
 ACME_HOME="${ACME_HOME:-/root/.acme.sh}"
 ACME="${ACME_BIN:-${ACME_HOME}/acme.sh}"
@@ -48,6 +50,10 @@ ECC_DIR=""
 ECC_BACKUP=""
 ECC_STATE_CHANGED="no"
 CERT_ISSUED="no"
+TEMP_ACME_FILES=()
+LOG_WRITER_PID=""
+RESULT_OPERATION_ID=""
+SCRIPT_RESULT_BRIDGE="${SCRIPT_DIR}/vhost-manager/curatormd-v2/script_result_bridge.py"
 
 # ---------- Messaging helpers ----------
 ts() { date +"%F %T %z"; }
@@ -55,6 +61,29 @@ info() { echo "INFO  [$(ts)] $*"; }
 warn() { echo "WARN  [$(ts)] $*" >&2; }
 err()  { echo "ERROR [$(ts)] $*" >&2; }
 die()  { err "$*"; exit 1; }
+
+cleanup_transient_acme_files() {
+  local exit_status="${1:-$?}" cleanup_failed=0 temp_file
+  trap - EXIT
+  for temp_file in "${TEMP_ACME_FILES[@]}"; do
+    [ -n "$temp_file" ] || continue
+    if ! rm -f -- "$temp_file"; then
+      err "Could not remove a transient ACME output file."
+      cleanup_failed=1
+    fi
+  done
+  if [ -n "$LOG_WRITER_PID" ]; then
+    exec 1>&- 2>&-
+    if ! wait "$LOG_WRITER_PID"; then
+      cleanup_failed=1
+    fi
+    exec 3>&-
+  fi
+  if [ "$cleanup_failed" -ne 0 ]; then
+    exit 1
+  fi
+  exit "$exit_status"
+}
 
 # Print command then run it (stdout preserved via global logging tee)
 run() {
@@ -186,8 +215,12 @@ rollback() {
 }
 
 on_exit() {
-  # Do not auto-rollback on normal exit; rollback is explicit via traps/errors.
-  :
+  local exit_status=$?
+  if [ -n "$RESULT_OPERATION_ID" ]; then
+    python3 "$SCRIPT_RESULT_BRIDGE" manual_dns_renewal "$RESULT_OPERATION_ID" "$exit_status" || \
+      warn "The Curator receipt was not confirmed; check the Vhost result queue."
+  fi
+  cleanup_transient_acme_files "$exit_status"
 }
 
 trap 'rollback "received interrupt/signal"' INT TERM HUP
@@ -670,13 +703,20 @@ USAGE
     read -r -p "INPUT: enter domain name (e.g., example.com): " DOMAIN_RAW || true
     DOMAIN="$(validate_domain "${DOMAIN_RAW:-}")"
   fi
+
+  RESULT_OPERATION_ID="$(cat /proc/sys/kernel/random/uuid)"
   WWW="www.${DOMAIN}"
   RUN_MODE="$(select_run_mode "$mode_arg")"
   ECC_DIR="${ACME_HOME}/${DOMAIN}_ecc"
 
   LOG_FILE="${LOG_DIR}/acme-dns-manual-${DOMAIN}-$(date +%F-%H%M%S).log"
-  # Start logging AFTER we know the domain for per-domain log filenames.
-  exec > >(tee -a "$LOG_FILE") 2>&1
+  # Keep the operator's terminal output intact while redacting challenge values
+  # from the persistent log. Wait for the writer during EXIT cleanup.
+  exec 3>&1
+  exec > >(tee /dev/fd/3 | python3 "$SCRIPT_DIR/redact_manual_dns_log.py" \
+    >>"$LOG_FILE")
+  LOG_WRITER_PID=$!
+  exec 2>&1
   info "Logging to: $LOG_FILE"
   info "Selected certificate flow: $RUN_MODE"
 
@@ -774,6 +814,7 @@ USAGE
   # Issue (manual DNS) - capture output for TXT parsing
   local issue_out issue_rc cert_ready_after_issue="no"
   issue_out="$(mktemp)"
+  TEMP_ACME_FILES+=("$issue_out")
   info "Issue certificate with manual DNS; acme.sh will print the required TXT records"
   set +e
   "$ACME" --issue \
@@ -889,6 +930,7 @@ USAGE
     # Renew (force when we haven't produced a cert yet)
     local renew_out renew_rc
     renew_out="$(mktemp)"
+    TEMP_ACME_FILES+=("$renew_out")
     info "Renew certificate with manual DNS and ECC"
     local renew_cmd=( "$ACME" --renew -d "$DOMAIN" -d "$WWW" --ecc --dns --yes-I-know-dns-manual-mode-enough-go-ahead-please --debug 2 )
     [ -n "$renew_force_flag" ] && renew_cmd+=( "$renew_force_flag" )
@@ -1057,6 +1099,7 @@ USAGE
   installed_fingerprint="$(openssl x509 -in "$installed_cert_path" -noout -fingerprint -sha256)"
   for attempt in $(seq 1 20); do
     served_cert_file="$(mktemp)"
+    TEMP_ACME_FILES+=("$served_cert_file")
     if openssl s_client -4 -servername "$DOMAIN" -connect "127.0.0.1:443" </dev/null 2>/dev/null \
       | openssl x509 -out "$served_cert_file" 2>/dev/null && \
       openssl x509 -in "$served_cert_file" -noout -checkhost "$DOMAIN" >/dev/null 2>&1 && \

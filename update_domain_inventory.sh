@@ -17,6 +17,8 @@ OUTPUT_PATH="${SCRIPT_DIR}/DOMAIN_CERTIFICATE_INVENTORY.md"
 NGINX_ENABLED="/etc/nginx/sites-enabled"
 ADD_NEW_DOMAIN=""
 TMP_DIR=""
+RESULT_OPERATION_ID=""
+SCRIPT_RESULT_BRIDGE="${SCRIPT_DIR}/vhost-manager/curatormd-v2/script_result_bridge.py"
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -77,9 +79,16 @@ parse_args() {
 }
 
 cleanup() {
+  local exit_status=$?
+  trap - EXIT
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
-    rm -rf "$TMP_DIR"
+    rm -rf "$TMP_DIR" || exit_status=1
   fi
+  if [ -n "$RESULT_OPERATION_ID" ]; then
+    python3 "$SCRIPT_RESULT_BRIDGE" domain_inventory_refresh "$RESULT_OPERATION_ID" "$exit_status" || \
+      printf 'WARNING: Curator receipt was not confirmed; check the Vhost result queue.\n' >&2
+  fi
+  exit "$exit_status"
 }
 
 add_candidate() {
@@ -237,10 +246,11 @@ certificate_row() {
 
 main() {
   parse_args "$@"
+  RESULT_OPERATION_ID="$(cat /proc/sys/kernel/random/uuid)"
+  trap cleanup EXIT
   [ -r "$SOURCE_PATH" ] || die "Source inventory is not readable: $SOURCE_PATH"
   mkdir -p "$(dirname -- "$OUTPUT_PATH")"
   TMP_DIR="$(mktemp -d)"
-  trap cleanup EXIT
 
   declare -A candidates=()
   declare -a current_domains=() new_domains=()

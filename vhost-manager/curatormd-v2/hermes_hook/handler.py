@@ -20,8 +20,8 @@ CONTEXT_FIELDS = frozenset(
 )
 
 
-def _durable_receipt(result: object) -> bool:
-    """Acknowledge only a durable processed or duplicate Curator receipt."""
+def _durable_receipt(result: object, *, event_id: str) -> bool:
+    """Acknowledge only the durable receipt for this exact project event."""
 
     if isinstance(result, str):
         result = json.loads(result)
@@ -30,6 +30,8 @@ def _durable_receipt(result: object) -> bool:
     receipt = result.get("receipt", result)
     return (
         isinstance(receipt, Mapping)
+        and receipt.get("project_id") == PROJECT_ID
+        and receipt.get("event_id") == event_id
         and receipt.get("status") in {"processed", "duplicate"}
     )
 
@@ -97,6 +99,9 @@ async def handle(
             "occurred_at": hook_context["occurred_at"],
             "context": raw_context,
         }
+        source_id = hook_context.get("source_id")
+        if isinstance(source_id, str):
+            payload["source_id"] = source_id
         response = await asyncio.to_thread(
             ctx.call_mcp,
             MCP_SERVER,
@@ -112,7 +117,9 @@ async def handle(
             or response.get("truncated") is True
         ):
             return False
-        return _durable_receipt(response.get("result"))
+        return _durable_receipt(
+            response.get("result"), event_id=str(payload["event_id"])
+        )
     except Exception:
         # Keep event data and internal errors out of gateway logs and responses.
         return False

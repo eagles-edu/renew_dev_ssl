@@ -369,6 +369,56 @@ function createSiteAccount(user, home, config) {
   return { created: true }
 }
 
+function removeSiteAccount(user, config) {
+  if (config.testMode) return
+  const account = run("/usr/bin/getent", ["passwd", user], config)
+  if (account.status === 2) return
+  if (account.status !== 0)
+    throw new Error(`Could not inspect site account ${user}: ${account.stderr || account.stdout}`)
+
+  const terminate = run("/usr/bin/pkill", ["-TERM", "-u", user], config)
+  if (terminate.status !== 0 && terminate.status !== 1)
+    throw new Error(`Could not stop site account ${user}: ${terminate.stderr || terminate.stdout}`)
+  const delay = new Int32Array(new SharedArrayBuffer(4))
+  let processes
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    processes = run("/usr/bin/pgrep", ["-u", user], config)
+    if (processes.status === 1) break
+    if (processes.status !== 0)
+      throw new Error(
+        `Could not inspect site processes for ${user}: ${processes.stderr || processes.stdout}`
+      )
+    Atomics.wait(delay, 0, 0, 100)
+  }
+  if (processes?.status === 0)
+    throw new Error(`Site account ${user} still has running processes; rollback can be retried.`)
+
+  const removal = run("/usr/sbin/userdel", [user], config)
+  if (removal.status !== 0)
+    throw new Error(`Could not remove site account ${user}: ${removal.stderr || removal.stdout}`)
+  const accountAfterRemoval = run("/usr/bin/getent", ["passwd", user], config)
+  if (accountAfterRemoval.status === 0)
+    throw new Error(`Site account ${user} still exists after removal.`)
+  if (accountAfterRemoval.status !== 2)
+    throw new Error(`Could not verify site account ${user} removal.`)
+
+  const privateGroup = run("/usr/bin/getent", ["group", user], config)
+  if (privateGroup.status === 0) {
+    const groupRemoval = run("/usr/sbin/groupdel", [user], config)
+    if (groupRemoval.status !== 0)
+      throw new Error(
+        `Could not remove private site group ${user}: ${groupRemoval.stderr || groupRemoval.stdout}`
+      )
+    const groupAfterRemoval = run("/usr/bin/getent", ["group", user], config)
+    if (groupAfterRemoval.status === 0)
+      throw new Error(`Private site group ${user} still exists after removal.`)
+    if (groupAfterRemoval.status !== 2)
+      throw new Error(`Could not verify private site group ${user} removal.`)
+  } else if (privateGroup.status !== 2) {
+    throw new Error(`Could not inspect private site group ${user}.`)
+  }
+}
+
 function databaseSql(sql, config) {
   return run(
     config.mysqlBinary || "/usr/bin/mysql",
@@ -542,6 +592,33 @@ function addOperation(config, entry) {
   })
 }
 
+function recordOperation(config, entry) {
+  let recorded = null
+  writeManifest(config, (manifest) => {
+    const existing = (manifest.operations || []).find((item) => item.id === entry.id)
+    recorded = existing ? { ...existing, ...entry, curatorV2: existing.curatorV2 } : entry
+    manifest.operations = [
+      recorded,
+      ...(manifest.operations || []).filter((item) => item.id !== entry.id),
+    ].slice(0, 100)
+  })
+  return recorded
+}
+
+function recoverInterruptedSslRenewals(config) {
+  const unfinished = history(config).filter(
+    (operation) => operation.kind === "ssl-renew" && operation.state === "running"
+  )
+  return unfinished.map((operation) =>
+    recordOperation(config, {
+      ...operation,
+      state: "interrupted",
+      finishedAt: new Date().toISOString(),
+      exitCode: null,
+    })
+  )
+}
+
 function applyReset(plan, config) {
   ensureRoot(config)
   assertTargetsUnchanged(plan)
@@ -666,6 +743,8 @@ function applySite(plan, config) {
         changedPaths.push(file.path)
       }
     }
+    if (config.testMode && config.testFailApplyDomain === domain)
+      throw new Error("Injected test-mode apply failure.")
     const checks = testServices(config)
     if (!checks.nginx.ok || !checks.ols.ok)
       throw new Error(
@@ -785,7 +864,13 @@ function applySite(plan, config) {
         }
       }
     }
-    if (accountResult.created && !config.testMode) run("/usr/sbin/userdel", [account], config)
+    if (accountResult.created) {
+      try {
+        removeSiteAccount(account, config)
+      } catch (cleanupError) {
+        error.message = `${error.message} Site-account cleanup also failed: ${cleanupError.message}`
+      }
+    }
     addOperation(config, {
       id: plan.id,
       kind: "site",
@@ -896,34 +981,64 @@ function history(config) {
   return readManifest(config).operations || []
 }
 
+function recordCuratorV2(config, operationId, receipt) {
+  let updated = null
+  writeManifest(config, (manifest) => {
+    manifest.operations = (manifest.operations || []).map((operation) => {
+      if (operation.id !== operationId) return operation
+      updated = { ...operation, curatorV2: receipt }
+      return updated
+    })
+  })
+  return updated
+}
+
+function rollbackRecord(operation) {
+  return {
+    id: crypto.randomUUID(),
+    kind: "rollback",
+    title: `Rollback ${operation.title}`,
+    domain: operation.domain,
+    at: new Date().toISOString(),
+    reversesOperationId: operation.id,
+    rollbackAvailable: false,
+    state: "complete",
+  }
+}
+
+function recordFailedRollback(operationId, config) {
+  const operation = history(config).find((entry) => entry.id === operationId)
+  if (!operation || !operation.rollbackAvailable) return null
+  const failed = {
+    ...rollbackRecord(operation),
+    state: "failed",
+    failureKind: "rollback_failed",
+  }
+  writeManifest(config, (manifest) => {
+    manifest.operations = [failed, ...(manifest.operations || [])].slice(0, 100)
+  })
+  return failed
+}
+
 function rollbackOperation(operationId, config) {
   ensureRoot(config)
   const operation = history(config).find((entry) => entry.id === operationId)
   if (!operation || !operation.rollbackAvailable)
     throw new Error("No reversible operation with that id was found.")
   if (operation.kind === "adopt") {
+    const rollback = rollbackRecord(operation)
+    const rolledBackOperation = { ...operation, rollbackAvailable: false, state: "rolled-back" }
     writeManifest(config, (manifest) => {
       if (operation.previousSite) manifest.sites[operation.domain] = operation.previousSite
       else delete manifest.sites[operation.domain]
-      manifest.operations = [
-        {
-          id: crypto.randomUUID(),
-          kind: "rollback",
-          title: `Undo ${operation.title}`,
-          at: new Date().toISOString(),
-          rollbackAvailable: false,
-          state: "complete",
-        },
-        ...(manifest.operations || []),
-      ].slice(0, 100)
+      manifest.operations = [rollback, ...(manifest.operations || [])].slice(0, 100)
       manifest.operations = manifest.operations.map((entry) =>
-        entry.id === operationId
-          ? { ...entry, rollbackAvailable: false, state: "rolled-back" }
-          : entry
+        entry.id === operationId ? rolledBackOperation : entry
       )
     })
     return {
-      operation,
+      operation: rolledBackOperation,
+      rollback,
       checks: {
         filesChanged: {
           ok: true,
@@ -962,8 +1077,7 @@ function rollbackOperation(operationId, config) {
         operation.firewallPrevious || { tcp: [], udp: [] },
         config
       )
-    if (operation.accountCreated && operation.account && !config.testMode)
-      run("/usr/sbin/userdel", [operation.account], config)
+    if (operation.accountCreated && operation.account) removeSiteAccount(operation.account, config)
   }
   const checks = testServices(config)
   if (!checks.nginx.ok || !checks.ols.ok)
@@ -972,30 +1086,20 @@ function rollbackOperation(operationId, config) {
     )
   reloadService("nginx", config)
   reloadService("lshttpd", config)
+  const rollback = rollbackRecord(operation)
+  const rolledBackOperation = { ...operation, rollbackAvailable: false, state: "rolled-back" }
   writeManifest(config, (manifest) => {
     if (operation.kind === "reset") manifest.sites = operation.previousSites || {}
     if (operation.kind === "site") {
       if (operation.siteCreated) delete manifest.sites[operation.domain]
       else manifest.sites[operation.domain] = operation.previousSite
     }
-    manifest.operations = [
-      {
-        id: crypto.randomUUID(),
-        kind: "rollback",
-        title: `Rollback ${operation.title}`,
-        at: new Date().toISOString(),
-        rollbackAvailable: false,
-        state: "complete",
-      },
-      ...(manifest.operations || []),
-    ].slice(0, 100)
+    manifest.operations = [rollback, ...(manifest.operations || [])].slice(0, 100)
     manifest.operations = manifest.operations.map((entry) =>
-      entry.id === operationId
-        ? { ...entry, rollbackAvailable: false, state: "rolled-back" }
-        : entry
+      entry.id === operationId ? rolledBackOperation : entry
     )
   })
-  return { operation, checks }
+  return { operation: rolledBackOperation, rollback, checks }
 }
 
 function serviceState(config) {
@@ -1018,6 +1122,10 @@ module.exports = {
   applyPlan,
   archiveExamples,
   history,
+  recordCuratorV2,
+  recordFailedRollback,
+  recordOperation,
+  recoverInterruptedSslRenewals,
   rollbackOperation,
   readManifest,
   serviceState,

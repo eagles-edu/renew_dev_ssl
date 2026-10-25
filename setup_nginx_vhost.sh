@@ -15,6 +15,8 @@ TEMP_CONFIG=""
 CONFIG_INSTALLED="no"
 LINK_CREATED="no"
 SUCCESS="no"
+RESULT_OPERATION_ID=""
+SCRIPT_RESULT_BRIDGE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/vhost-manager/curatormd-v2/script_result_bridge.py"
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -209,9 +211,14 @@ rollback() {
 
 cleanup() {
   local exit_status=$?
+  trap - EXIT
   if [ "$SUCCESS" != "yes" ] && \
     { [ "$CONFIG_INSTALLED" = "yes" ] || [ "$LINK_CREATED" = "yes" ]; }; then
     rollback
+  fi
+  if [ -n "$RESULT_OPERATION_ID" ]; then
+    python3 "$SCRIPT_RESULT_BRIDGE" nginx_vhost_setup "$RESULT_OPERATION_ID" "$exit_status" || \
+      printf 'WARNING: Curator receipt was not confirmed; check the Vhost result queue.\n' >&2
   fi
   exit "$exit_status"
 }
@@ -222,6 +229,9 @@ main() {
   validate_domain
   validate_webroot
   validate_backend
+  if [ "$APPLY" = "yes" ]; then
+    RESULT_OPERATION_ID="$(cat /proc/sys/kernel/random/uuid)"
+  fi
 
   local config_path="${AVAILABLE_DIR}/${DOMAIN}.conf"
   local enabled_path="${ENABLED_DIR}/${DOMAIN}.conf"
