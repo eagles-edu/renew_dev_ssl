@@ -15,6 +15,7 @@ adapters = []
 
 [staging]
 root = ".curatormd-v2/staging"
+max_project_bytes = 262144000
 
 [persistence]
 targets = [".curatormd-v2/persistence/HISTORY.md", ".curatormd-v2/persistence/LESSONS-LEARNED.md"]

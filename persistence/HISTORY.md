@@ -449,3 +449,27 @@ the Vhost route and discards output. The cron was not changed.
 **Open:** Persistent-log retention, actual certificate renewal, external provider/host behavior, human disposition, and production/release evidence remain open. Multi-consumer generalization reopens only if the owner expands scope.
 
 **Outcome:** Closed standalone source/artifact coverage for the approved dirty local alpha snapshot; no live certificate or staging artifact was deleted.
+
+## 2026-10-26 — Enforce approved manual-DNS log expiry
+
+**Intent:** Enforce the owner's 72-hour maximum age for manual-DNS status logs without routing log contents through Curator.
+
+**Changed fact:** Added a root-owned service and persistent six-hour timer. The cleanup selects only regular files directly under `/var/log` named `acme-dns-manual-*.log`, reports a deletion count only, and deletes at 65 hours 44 minutes 59 seconds to allow for the timer interval and 15-minute randomized spread. It does not modify the manual renewal utility or its redaction filter.
+
+**Verification:** Two focused tests pass for age/name/type and symlink boundaries. `systemd-analyze verify` accepts both units; its only warnings concern the pre-existing `lshttpd.service`. The installed timer is enabled and active; the service exited successfully and journaled a count of two removed logs. A path-only count found zero matching regular logs afterward. Installed script and unit hashes match source. The sorted six-path implementation/test manifest SHA-256 is `a3b07fadb8a08b50557b20f7008f86bcc0c90906d2991c2c7b2f46f65121da3f`. No log contents were opened or sent to Curator.
+
+**Open:** Real ACME behavior and cleanup while the host is powered off are not established. The timer cannot run while the host is stopped.
+
+**Outcome:** Applied the approved local Vhost/OS retention rule; no application source, certificate, or Nginx state changed.
+
+## 2026-10-27 — Set the Vhost Curator staging warning threshold
+
+**Intent:** Keep the local Vhost utility's Curator staging signal useful without imposing an arbitrary file-count limit or stopping writes at 250 MiB.
+
+**Changed fact:** The consumer `.curatormd-v2.toml` now sets only `max_project_bytes = 262144000`. Curator treats it as a warning threshold; there is no project file-count setting. Normal Vhost writes and renewal remain outside this staging signal.
+
+**Verification:** Config SHA-256 is `a37448f38683c864480d4f90db8fc6a6b694311679b598979f86ff574713f746`; its project ID, root, read scope, adapters, and persistence targets are unchanged. Curator's 18 staging tests prove new staged files are accepted above the threshold. The attended Curator registration is active at revision 3 with the same config hash. The profile-scoped Hermes status probe reports healthy status, complete empty staging inventory, 35 processed receipts, 15 goals, and 11 facts. Both repository diff checks pass.
+
+**Open:** The real profile has not crossed 250 MiB, so threshold warning behavior is verified only by local tests. External alerts, real certificate renewal, production retention, and release evidence remain open.
+
+**Outcome:** Applied the warning-only staging policy to the local alpha config without restarting a service or changing Vhost application behavior.
