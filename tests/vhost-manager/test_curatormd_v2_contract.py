@@ -855,6 +855,48 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
                     "POST", "/api/plan/site", {"domain": "curator-smoke.test"}
                 )
                 plan = preview["plan"]
+                self.assertEqual(
+                    plan["curatorV2Goal"],
+                    {
+                        "problem": f"{plan['title']}: {plan['summary']}",
+                        "success_criteria": [
+                            {
+                                "criterion_id": "nginx_valid",
+                                "description": "The generated Nginx configuration passes validation.",
+                            },
+                            {
+                                "criterion_id": "ols_valid",
+                                "description": "The generated OpenLiteSpeed configuration passes validation.",
+                            },
+                            {
+                                "criterion_id": "site_reachable",
+                                "description": "The configured site returns a navigable response after reload.",
+                            },
+                            {
+                                "criterion_id": "human_review",
+                                "description": "A human reviews this Vhost Manager operation outcome.",
+                            },
+                        ],
+                    },
+                )
+                static_preview = request(
+                    "POST",
+                    "/api/plan/site",
+                    {
+                        "domain": "curator-static-smoke.test",
+                        "requestMode": "static",
+                    },
+                )["plan"]
+                self.assertEqual(
+                    [
+                        item["criterion_id"]
+                        for item in static_preview["curatorV2Goal"]["success_criteria"]
+                    ],
+                    ["nginx_valid", "site_reachable", "human_review"],
+                )
+                self.assertIn("Nginx static-file config", static_preview["summary"])
+                self.assertNotIn("OpenLiteSpeed", static_preview["summary"])
+                self.assertNotIn("PHP", static_preview["summary"])
                 applied = request(
                     "POST",
                     "/api/apply",
@@ -1057,6 +1099,23 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
                 )
                 self.assertEqual(recovered_renewal["state"], "interrupted")
                 self.assertEqual(recovered_renewal["curatorV2"]["status"], "received")
+                pending_apply = next(
+                    item
+                    for item in request("GET", "/api/history")["history"]
+                    if item["id"] == operation_id
+                )
+                self.assertEqual(
+                    pending_apply["curatorRequest"],
+                    {
+                        "problem": f"{plan['title']}: {plan['summary']}",
+                        "criterion_ids": [
+                            "nginx_valid",
+                            "ols_valid",
+                            "site_reachable",
+                            "human_review",
+                        ],
+                    },
+                )
                 recovered_retry = request(
                     "POST",
                     "/api/curator/retry",
@@ -1136,6 +1195,7 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
                 self.assertEqual(receipt.get("project_id"), config.project_id, receipt)
                 self.assertEqual(receipt["event_id"], f"vhost-apply-{operation_id}")
                 self.assertEqual(receipt["status"], "received")
+                self.assertNotIn("curatorRequest", retried["operation"])
                 rolled_back = request(
                     "POST", "/api/rollback", {"operationId": operation_id}
                 )
@@ -1225,6 +1285,28 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
                 self.assertEqual(stored.status, EventInboxStatus.PROCESSED)
                 goal = store.get_goal(f"vhost-op-{operation_id}", config.project_id)
                 self.assertEqual(goal.status, GoalStatus.ACTIVE)
+                self.assertEqual(goal.problem, f"{plan['title']}: {plan['summary']}")
+                self.assertEqual(
+                    goal.success_criteria,
+                    (
+                        SuccessCriterion(
+                            "nginx_valid",
+                            "The generated Nginx configuration passes validation.",
+                        ),
+                        SuccessCriterion(
+                            "ols_valid",
+                            "The generated OpenLiteSpeed configuration passes validation.",
+                        ),
+                        SuccessCriterion(
+                            "site_reachable",
+                            "The configured site returns a navigable response after reload.",
+                        ),
+                        SuccessCriterion(
+                            "human_review",
+                            "A human reviews this Vhost Manager operation outcome.",
+                        ),
+                    ),
+                )
                 self.assertNotIn(str(database), goal.problem)
                 self.assertNotIn(str(fixture_root), goal.problem)
                 for target_path in operation["files"]:
@@ -1240,11 +1322,22 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
                     f"vhost-op-{failed_apply_id}", config.project_id
                 )
                 self.assertEqual(failed_apply_goal.status, GoalStatus.ACTIVE)
-                self.assertIn("apply failed", failed_apply_goal.problem)
+                self.assertEqual(
+                    failed_apply_goal.problem,
+                    f"{failed_apply_preview['title']}: {failed_apply_preview['summary']}",
+                )
                 self.assertNotIn("Injected test-mode apply failure", failed_apply_goal.problem)
                 self.assertNotIn(str(database), failed_apply_goal.problem)
                 self.assertNotIn(str(fixture_root), failed_apply_goal.problem)
                 self.assertNotIn(str(base), failed_apply_goal.problem)
+                failed_apply_facts = store.list_facts(
+                    f"vhost-op-{failed_apply_id}", config.project_id
+                )
+                self.assertEqual(len(failed_apply_facts), 1)
+                self.assertEqual(
+                    failed_apply_facts[0].bullet,
+                    "Vhost Manager recorded operation outcome: apply failed.",
+                )
                 rollback_event_id = f"vhost-rollback-{rollback['id']}"
                 stored_rollback = store.event_receipt(config.project_id, rollback_event_id)
                 self.assertEqual(stored_rollback.status, EventInboxStatus.PROCESSED)
@@ -1346,7 +1439,20 @@ class CuratorV2ConsumerContractTests(unittest.TestCase):
 
             replay = subprocess.run(
                 [sys.executable, str(helper)],
-                input=json.dumps({"operation": operation}),
+                input=json.dumps(
+                    {
+                        "operation": operation,
+                        "request": {
+                            "problem": f"{plan['title']}: {plan['summary']}",
+                            "criterion_ids": [
+                                "nginx_valid",
+                                "ols_valid",
+                                "site_reachable",
+                                "human_review",
+                            ],
+                        },
+                    }
+                ),
                 capture_output=True,
                 check=False,
                 cwd=source_root,

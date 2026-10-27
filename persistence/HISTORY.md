@@ -1,5 +1,46 @@
 # Decision history
 
+## 2026-10-27 — Match live Vhost static-site intent to Curator criteria
+
+**Intent:** Verify that a request-bound local Vhost operation preserves its
+selected mode, problem, and criteria through the Curator bridge and rollback.
+
+**Changed fact:** Static-site previews now omit OpenLiteSpeed validation and
+describe only the Nginx static-file changes. The loopback UI applied and rolled
+back one reserved `.test` site; both Curator receipts processed, the created
+goal stayed active with every criterion open, and restart recovery preserved
+the operation history.
+
+**Verification:** The focused Curator consumer contract passed. After rollback
+and a Vhost service restart, the site, account, and home were absent and both
+web services remained active with valid configuration. The content-free
+acceptance record is in `docs/curatormd-v2-alpha.md`.
+
+**Open:** Same-event replay, out-of-scope before/after hashes, bounded
+`goal_report`, human review, and release evidence remain open.
+
+**Outcome:** Record local request-bound workflow evidence without marking any
+Curator criterion verified or closing the release gate.
+
+## 2026-10-27 — Match Vhost acceptance criteria to request mode
+
+**Intent:** Keep the Curator V2 goal preview tied to checks the selected
+Vhost routing mode actually performs.
+
+**Changed fact:** Site-plan previews require OpenLiteSpeed validation only for
+the `ols` request mode; static and proxy plans require Nginx validation and the
+site response check. The operation summary now describes only the web server
+and PHP changes selected by that mode. Every plan still includes human review.
+
+**Verification:** The focused Vhost Curator contract asserts that a static
+plan omits `ols_valid` while the existing OpenLiteSpeed plan keeps it.
+
+**Open:** This source-level contract does not establish a live accepted
+criterion, human disposition, or deployment release gate.
+
+**Outcome:** Prevent the preview from asking reviewers to accept a validation
+that the selected site mode does not use.
+
 ## 2026-10-25 — Verify installed Curator V2 plugin route
 
 **Changed fact:** The local Vhost Manager service is active. Through the
@@ -473,3 +514,15 @@ the Vhost route and discards output. The cron was not changed.
 **Open:** The real profile has not crossed 250 MiB, so threshold warning behavior is verified only by local tests. External alerts, real certificate renewal, production retention, and release evidence remain open.
 
 **Outcome:** Applied the warning-only staging policy to the local alpha config without restarting a service or changing Vhost application behavior.
+
+## 2026-10-27 — Preserve Vhost apply intent across Curator retries
+
+**Intent:** Keep the Vhost apply preview's bounded problem and criteria attached to its Curator goal when the Curator bridge is unavailable and the receipt must be retried.
+
+**Changed fact:** The plan response now includes the compact Curator V2 problem and fixed criterion descriptions. The Vhost review modal shows those criteria as open before apply, and `/api/apply` sends the same problem and IDs. The operation manifest stores only that bounded request while the Curator receipt is pending. Retries and replays reuse it; a durable receipt removes the temporary request from the operation record. The outcome fact remains separate from the original problem.
+
+**Verification:** The focused Vhost browser preview test passes against a temporary UI build and isolated test server. The `test_vhost_apply_route_persists_and_retries_exact_curator_receipt` integration passes; it checks request persistence across an unavailable-bridge restart, the stored problem and criteria, failure facts without raw errors, request cleanup after receipt, and exact-payload replay. Node syntax checks and Python compilation pass. The production asset directory and root Vhost process were left untouched.
+
+**Open:** This is a disposable test fixture, not the named owner-reviewed real-consumer acceptance run or evidence packet required by the Curator V2 plan. No checklist item was closed.
+
+**Outcome:** Make local apply retries preserve the original bounded Vhost intent without retaining raw form data or falsely closing the real-run gate.

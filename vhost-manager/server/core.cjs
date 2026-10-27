@@ -1612,7 +1612,18 @@ function sitePlan(config, input, currentInventory, manifest = {}) {
     confirmation: domain,
     summary: managedSite
       ? "Update the manager-owned Nginx/OLS site settings and security policy after reviewing each generated diff."
-      : `Create the webroot, site account, Nginx/OLS configs, and private PHP configuration; enable only the ACME challenge vhost.${database.enabled ? ` Also create the ${database.engine} database and a localhost-only user.` : ""}`,
+      : [
+          "Create the webroot and dedicated site account",
+          requestMode === "ols"
+            ? "create Nginx and OpenLiteSpeed configs with private PHP configuration"
+            : requestMode === "proxy"
+              ? "create an Nginx reverse-proxy config for the loopback upstream"
+              : "create an Nginx static-file config",
+          "enable only the ACME challenge vhost",
+          ...(database.enabled
+            ? [`create the ${database.engine} database and a localhost-only user`]
+            : []),
+        ].join("; "),
     database,
     settings: {
       domain,

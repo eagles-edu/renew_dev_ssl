@@ -12,7 +12,17 @@ const plans = new Map()
 let sslJob = null
 const MANAGER_SERVICE = "renew-dev-ssl-vhost-manager.service"
 const csrf = crypto.randomBytes(24).toString("base64url")
-const publicDir = path.join(__dirname, "public")
+const publicDir =
+  config.testMode && process.env.VHOST_MANAGER_PUBLIC_DIR
+    ? path.resolve(process.env.VHOST_MANAGER_PUBLIC_DIR)
+    : path.join(__dirname, "public")
+const CURATOR_V2_CRITERIA = Object.freeze({
+  nginx_valid: "The generated Nginx configuration passes validation.",
+  ols_valid: "The generated OpenLiteSpeed configuration passes validation.",
+  site_reachable: "The configured site returns a navigable response after reload.",
+  operation_recorded: "Vhost Manager records the requested operation outcome.",
+  human_review: "A human reviews this Vhost Manager operation outcome.",
+})
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -75,12 +85,34 @@ function scan() {
 }
 
 function storePlan(plan) {
-  plans.set(plan.id, plan)
+  const criterionIds =
+    plan.kind === "site"
+      ? [
+          "nginx_valid",
+          ...(plan.settings?.requestMode === "ols" ? ["ols_valid"] : []),
+          "site_reachable",
+        ]
+      : plan.kind === "toggle"
+        ? ["nginx_valid"]
+        : plan.kind === "reset"
+          ? ["nginx_valid", "ols_valid"]
+          : ["operation_recorded"]
+  const reviewedPlan = {
+    ...plan,
+    curatorV2Goal: {
+      problem: `${plan.title}: ${plan.summary}`,
+      success_criteria: [...criterionIds, "human_review"].map((criterion_id) => ({
+        criterion_id,
+        description: CURATOR_V2_CRITERIA[criterion_id],
+      })),
+    },
+  }
+  plans.set(reviewedPlan.id, reviewedPlan)
   for (const [id, item] of plans) if (item.expiresAt < Date.now()) plans.delete(id)
-  return plan
+  return reviewedPlan
 }
 
-function curatorV2Receipt(operation) {
+function curatorV2Receipt(operation, request = null) {
   const required = [
     "CURATOR_V2_BRIDGE_PYTHON",
     "CURATOR_V2_MCP_COMMAND",
@@ -132,6 +164,7 @@ function curatorV2Receipt(operation) {
         producerId: operation.producerId,
         exitCode: operation.exitCode,
       },
+      ...(request ? { request } : {}),
     }),
     timeout: 20_000,
     maxBuffer: 64 * 1024,
@@ -176,8 +209,17 @@ function curatorV2Receipt(operation) {
   return { status: "pending", reason: "receipt_unverified" }
 }
 
-function submitCuratorV2(operation) {
-  const receipt = curatorV2Receipt(operation)
+function submitCuratorV2(operation, request = null) {
+  if (request) {
+    const persisted = ops.recordCuratorV2Request(config, operation.id, request)
+    if (!persisted)
+      return {
+        ...operation,
+        curatorV2: { status: "pending", reason: "request_conflict" },
+      }
+    operation = persisted
+  }
+  const receipt = curatorV2Receipt(operation, request || operation.curatorRequest || null)
   return (
     ops.recordCuratorV2(config, operation.id, receipt) || {
       ...operation,
@@ -533,6 +575,12 @@ function api(req, res, url) {
         if (input.confirmation !== plan.confirmation)
           return send(res, 400, { error: "Confirmation text does not match the preview." })
         let result
+        const curatorRequest = {
+          problem: plan.curatorV2Goal.problem,
+          criterion_ids: plan.curatorV2Goal.success_criteria.map(
+            (criterion) => criterion.criterion_id
+          ),
+        }
         try {
           result = ops.applyPlan(plan, config)
         } catch (error) {
@@ -541,7 +589,7 @@ function api(req, res, url) {
             .history(config)
             .find((entry) => entry.id === plan.id && entry.state === "failed")
           if (!failed) throw error
-          const operation = submitCuratorV2(failed)
+          const operation = submitCuratorV2(failed, curatorRequest)
           return send(res, 400, {
             error: error.message || "Apply failed.",
             operation,
@@ -549,7 +597,7 @@ function api(req, res, url) {
           })
         }
         plans.delete(plan.id)
-        const operation = submitCuratorV2(result.operation)
+        const operation = submitCuratorV2(result.operation, curatorRequest)
         return send(res, 200, {
           ...result,
           operation,

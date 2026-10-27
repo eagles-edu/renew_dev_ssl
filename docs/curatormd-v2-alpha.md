@@ -286,3 +286,42 @@ write-only profile is denied the reviewer-gated
 adapter performs the ordinary progress projection. All test data was
 temporary. This does not run the Hermes gateway service or exercise a real
 Vhost application request, the production target, or authenticated identity.
+
+## Request-bound static-site acceptance run (2026-10-27)
+
+The loopback Vhost UI previewed and applied the disposable static site
+`v2accept-20261027.test`, then rolled it back through the same UI. The review
+preview showed the exact bounded problem and three open criteria:
+`nginx_valid`, `site_reachable`, and `human_review`. The request digest is
+`6b7de8ea5f743d6b7e5bf8dc03ec28c7298e99c8e1e745fd535e77f537de09bc` over the
+problem and ordered criterion IDs. The consumer config SHA-256 is
+`a37448f38683c864480d4f90db8fc6a6b694311679b598979f86ff574713f746`; relevant
+working-source hashes are recorded below. TCP and UDP firewall changes were
+zero.
+
+Apply operation `00ec3e2f-5736-4b37-ab8d-beed07436e77` produced processed
+Curator receipt `vhost-apply-00ec3e2f-5736-4b37-ab8d-beed07436e77` and goal
+`vhost-op-00ec3e2f-5736-4b37-ab8d-beed07436e77` in project
+`vhost-manager-alpha`. Rollback operation `eef7028b-a2c3-409b-92d3-dc1249f13a67`
+produced processed receipt `vhost-rollback-eef7028b-a2c3-409b-92d3-dc1249f13a67`
+and goal `vhost-rollback-eef7028b-a2c3-409b-92d3-dc1249f13a67`. After restarting
+the Vhost service, its history still showed the create as `rolled-back` and the
+rollback as `complete`; the domain, dedicated account, and site home were
+absent. Nginx and OpenLiteSpeed were active and configuration-valid. A
+read-only check of the created goal showed the exact problem and criteria, an
+active state, and next action `Review this Vhost Manager operation outcome.`
+No criterion was marked verified by the operation.
+
+The static-mode criterion and summary corrections are in `core.cjs` and
+`index.cjs`; their SHA-256 values are `4ea456dc01fa7c10111c434a1b46d174d391822bbe3419e6160c1737cf1731ca` and
+`9c69f73822ab6b6397b5811772efb7e30b0220cdbdd558d27ed9756e15cb1f60`.
+The focused `test_vhost_apply_route_persists_and_retries_exact_curator_receipt`
+passed, including the static-mode criteria and summary assertions. The source
+checkout was at `07a9fb8c45d66b521073118dd59dc3d00b8d4781` with pre-existing
+dirty files preserved.
+
+This advances the named local application-entrypoint run, but does not close
+the broader acceptance gate: a bounded Hermes `goal_report`, same-event replay
+of this live request, before/after hashes for out-of-scope targets, and the
+owner-reviewed evidence packet are still missing. The Curator criteria remain
+open pending their own evidence and human review.
