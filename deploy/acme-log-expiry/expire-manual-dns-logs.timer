@@ -1,0 +1,12 @@
+[Unit]
+Description=Six-hour cleanup of expired manual DNS renewal logs
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00
+Persistent=true
+RandomizedDelaySec=15min
+AccuracySec=1min
+Unit=expire-manual-dns-logs.service
+
+[Install]
+WantedBy=timers.target

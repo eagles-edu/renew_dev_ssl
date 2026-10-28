@@ -23,6 +23,7 @@ RELEASE_FILE = Path("/var/lib/crowdsec/permanent-web-attack-releases.txt")
 NGINX_MAP_FILE = Path("/var/lib/crowdsec/permanent-web-attack-map.conf")
 TRUSTED_PROXY_CONFIG = Path("/etc/nginx/snippets/oneshield-realip.conf")
 TRUSTED_PROXY_PATTERN = re.compile(r"^\s*set_real_ip_from\s+(\S+)\s*;", re.IGNORECASE)
+TRUSTED_CRAWLER_FILE = Path("/var/lib/crowdsec/trusted-crawler-cidrs.txt")
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -58,7 +59,42 @@ def is_trusted_proxy(address: Address, networks: tuple[Network, ...]) -> bool:
     return any(address.version == network.version and address in network for network in networks)
 
 
-def is_permanent_web_attack(alert: dict, trusted_networks: tuple[Network, ...]) -> bool:
+def is_trusted_crawler(address: Address, networks: tuple[Network, ...]) -> bool:
+    return any(address.version == network.version and address in network for network in networks)
+
+
+def trusted_crawler_networks(path: Path = TRUSTED_CRAWLER_FILE) -> tuple[Network, ...]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        # Before the feed is first installed, keep the existing ban policy.
+        return ()
+    except OSError as error:
+        raise RuntimeError(f"Cannot read trusted crawler list {path}: {error}") from error
+
+    networks: list[Network] = []
+    for line in lines:
+        value = line.partition("#")[0].strip()
+        if not value:
+            continue
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError as error:
+            raise RuntimeError(f"Invalid trusted crawler network {value!r} in {path}") from error
+        minimum_prefix = 8 if network.version == 4 else 16
+        if network.prefixlen < minimum_prefix:
+            raise RuntimeError(f"Trusted crawler network {network} is too broad")
+        if not network.network_address.is_global or not network.broadcast_address.is_global:
+            raise RuntimeError(f"Trusted crawler network {network} is not globally routable")
+        networks.append(network)
+    return tuple(networks)
+
+
+def is_permanent_web_attack(
+    alert: dict,
+    trusted_networks: tuple[Network, ...],
+    trusted_crawlers: tuple[Network, ...] = (),
+) -> bool:
     if alert.get("simulated") is True:
         return False
     source = alert.get("source") or {}
@@ -68,7 +104,7 @@ def is_permanent_web_attack(alert: dict, trusted_networks: tuple[Network, ...]) 
         address = ipaddress.ip_address(str(source.get("value", "")))
     except ValueError:
         return False
-    if is_trusted_proxy(address, trusted_networks):
+    if is_trusted_proxy(address, trusted_networks) or is_trusted_crawler(address, trusted_crawlers):
         return False
 
     scenario = str(alert.get("scenario", "")).lower()
@@ -85,14 +121,29 @@ def is_permanent_web_attack(alert: dict, trusted_networks: tuple[Network, ...]) 
 
 
 def alert_addresses(
-    rows: list[dict], trusted_networks: tuple[Network, ...]
+    rows: list[dict],
+    trusted_networks: tuple[Network, ...],
+    trusted_crawlers: tuple[Network, ...] = (),
 ) -> set[Address]:
     addresses: set[Address] = set()
     for alert in rows:
-        if is_permanent_web_attack(alert, trusted_networks):
+        if is_permanent_web_attack(alert, trusted_networks, trusted_crawlers):
             source = alert.get("source") or {}
             addresses.add(ipaddress.ip_address(str(source["value"])))
     return addresses
+
+
+def reconcile_addresses(
+    previous: set[Address],
+    detected: set[Address],
+    released: set[Address],
+    trusted_crawlers: tuple[Network, ...],
+) -> tuple[set[Address], set[Address]]:
+    addresses = (previous | detected) - released
+    crawler_releases = {
+        address for address in addresses if is_trusted_crawler(address, trusted_crawlers)
+    }
+    return addresses - crawler_releases, released | crawler_releases
 
 
 def load_state() -> set[Address]:
@@ -257,13 +308,14 @@ def main() -> int:
         return 1
     try:
         proxies = trusted_proxy_networks()
-        detected = alert_addresses(list_alerts(), proxies)
+        crawlers = trusted_crawler_networks()
+        detected = alert_addresses(list_alerts(), proxies, crawlers)
         released = load_releases()
-        addresses = (load_state() | detected) - released
+        addresses, removals = reconcile_addresses(load_state(), detected, released, crawlers)
         ensure_firewall()
         state = "".join(f"{address}\n" for address in sort_addresses(addresses))
         atomic_write(STATE_FILE, state, 0o600)
-        for address in sort_addresses(released):
+        for address in sort_addresses(removals):
             set_name = "banned_ipv4" if address.version == 4 else "banned_ipv6"
             run(
                 NFT,

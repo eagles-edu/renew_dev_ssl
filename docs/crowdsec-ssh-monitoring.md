@@ -8,6 +8,10 @@ Every unsimulated, IP-scoped CrowdSec HTTP security alert with remediation enabl
 
 Never ban an address inside the trusted OneShield ranges: WAF events can report the proxy address instead of the original client. Those ranges are read from the same Nginx trust snippet by the synchronizer. If the snippet is missing or has no trusted ranges, the synchronizer fails closed and does not add detections.
 
+Verified crawler networks from Sefinek's `all-crawlers-ips.txt` feed are also excluded from permanent bans. A daily updater stores accepted CIDRs in `/var/lib/crowdsec/trusted-crawler-cidrs.txt`, generates an Nginx `geo` include, validates and reloads Nginx when the list changes, then runs the ban synchronizer. ModSecurity and Nginx request-rate limits remain enabled. This is a permanent-ban exception only; it does not trust crawler User-Agent strings or bypass request inspection.
+
+The feed is third-party curated. Its parser rejects malformed entries, non-global networks, ranges broader than IPv4 `/8` or IPv6 `/16`, and lists with fewer than 500 networks. A failed download, parse, or Nginx validation retains the last accepted list. Existing permanent bans matching accepted crawler networks are removed from durable state, Nginx, and nftables. If an address later leaves the feed, a retained qualifying CrowdSec alert can make it eligible for a permanent ban again.
+
 Install or update the web policy as root. Preserve the runtime ban list if it already exists:
 
 ```bash
@@ -16,14 +20,21 @@ sudo install -o root -g root -m 0644 deploy/nginx/geoip-country-map.conf /etc/ng
 sudo install -o root -g root -m 0644 deploy/nginx/geoip-country-block.conf /etc/nginx/snippets/geoip-country-block.conf
 if ! sudo test -e /var/lib/crowdsec/permanent-web-attack-bans.txt; then sudo install -o root -g root -m 0600 deploy/crowdsec/permanent-web-attack-bans.txt /var/lib/crowdsec/permanent-web-attack-bans.txt; fi
 if ! sudo test -e /var/lib/crowdsec/permanent-web-attack-map.conf; then sudo install -o root -g root -m 0640 /dev/null /var/lib/crowdsec/permanent-web-attack-map.conf; fi
+if ! sudo test -e /var/lib/crowdsec/trusted-crawler-cidrs.txt; then sudo install -o root -g root -m 0644 /dev/null /var/lib/crowdsec/trusted-crawler-cidrs.txt; fi
+if ! sudo test -e /var/lib/crowdsec/trusted-crawler-map.conf; then sudo install -o root -g root -m 0644 /dev/null /var/lib/crowdsec/trusted-crawler-map.conf; fi
 sudo install -o root -g root -m 0755 deploy/crowdsec/permanent-web-attack-bans.py /usr/local/sbin/renew-ssl-permanent-web-attack-bans.py
 sudo install -o root -g root -m 0644 deploy/crowdsec/renew-permanent-web-attack-bans.service /etc/systemd/system/renew-permanent-web-attack-bans.service
 sudo install -o root -g root -m 0644 deploy/crowdsec/renew-permanent-web-attack-bans.timer /etc/systemd/system/renew-permanent-web-attack-bans.timer
+sudo install -o root -g root -m 0755 deploy/crowdsec/update-trusted-crawler-ranges.py /usr/local/sbin/renew-ssl-update-trusted-crawler-ranges.py
+sudo install -o root -g root -m 0644 deploy/crowdsec/update-trusted-crawler-ranges.service /etc/systemd/system/update-trusted-crawler-ranges.service
+sudo install -o root -g root -m 0644 deploy/crowdsec/update-trusted-crawler-ranges.timer /etc/systemd/system/update-trusted-crawler-ranges.timer
 sudo nginx -t
-sudo systemctl reload nginx
 sudo systemctl daemon-reload
-sudo systemctl enable --now renew-permanent-web-attack-bans.service renew-permanent-web-attack-bans.timer
+sudo systemctl start update-trusted-crawler-ranges.service
+sudo systemctl enable --now renew-permanent-web-attack-bans.timer update-trusted-crawler-ranges.timer
 ```
+
+The crawler updater is scheduled daily at 03:00 host time. Run it manually after an upstream or Nginx configuration incident; it retains the previous trusted list if it cannot safely install a new one.
 
 Verify the permanent path and dashboard:
 
@@ -32,6 +43,10 @@ sudo systemctl is-active crowdsec-firewall-bouncer.service renew-permanent-web-a
 sudo cat /var/lib/crowdsec/permanent-web-attack-bans.txt
 sudo nft list table inet renew_web_permanent
 sudo nginx -T 2>/dev/null | rg 'permanent_web_attack_ban|real_ip_recursive on'
+sudo systemctl is-active update-trusted-crawler-ranges.timer
+sudo systemctl list-timers update-trusted-crawler-ranges.timer
+sudo wc -l /var/lib/crowdsec/trusted-crawler-cidrs.txt
+sudo journalctl -u update-trusted-crawler-ranges.service -n 50 --no-pager
 curl -fsS http://127.0.0.1:4310/api/security
 ```
 

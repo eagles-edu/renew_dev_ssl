@@ -2,6 +2,14 @@
 
 Toolkit for manual DNS ACME certificate renewal with nginx swap/rollback safety, plus Playwright-based TLS posture verification.
 
+The **panel bar colors mean**:
+
+- gray #828282: no health check has run—setup is missing or prevented the read.
+- green #00ff00: Curator V2 returned healthy.
+- yellow #ffff00: a health read returned unknown or unavailable.
+- red #ff0000: Curator V2 returned degraded.
+- purple #800080: not a V2 state. In the old V1 bar it meant “Hermes unhealthy”; that meaning does not carry over to V2.
+
 ## Upgrade completion status
 
 Completed on **February 9, 2026**.

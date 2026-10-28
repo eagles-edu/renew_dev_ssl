@@ -5,9 +5,7 @@
       "url": "https://api.githubcopilot.com/mcp/",
       "headers": {
         "Authorization": "${input:Authorization}"
-      },
-      "gallery": "https://api.mcp.github.com",
-      "version": "0.24.1"
+      }
     },
     "codacy/codacy-mcp-server": {
       "type": "stdio",
@@ -16,9 +14,7 @@
       "env": {
         "CODACY_ACCOUNT_TOKEN": "${input:codacy_account_token}",
         "CODACY_CLI_VERSION": "${input:codacy_cli_version}"
-      },
-      "gallery": "https://api.mcp.github.com",
-      "version": "1.0.0"
+      }
     },
     "io.github.upstash/context7": {
       "type": "stdio",
@@ -26,15 +22,11 @@
       "args": ["-y", "@upstash/context7-mcp@1.0.31"],
       "env": {
         "CONTEXT7_API_KEY": "${input:CONTEXT7_API_KEY}"
-      },
-      "gallery": "https://api.mcp.github.com",
-      "version": "1.0.31"
+      }
     },
     "io.github.jfrog/jfrog-mcp-server": {
       "type": "http",
-      "url": "https://myPlatform.jfrog.github.io/mcp",
-      "gallery": "https://api.mcp.github.com",
-      "version": "0.1.1"
+      "url": "https://myPlatform.jfrog.github.io/mcp"
     }
   },
   "inputs": [

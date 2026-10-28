@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh trusted crawler IP ranges and reconcile permanent bans
+Wants=network-online.target
+After=network-online.target nginx.service crowdsec.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/renew-ssl-update-trusted-crawler-ranges.py
+TimeoutStartSec=180s
+
+[Install]
+WantedBy=multi-user.target

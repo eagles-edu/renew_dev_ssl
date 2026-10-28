@@ -329,6 +329,7 @@ function App() {
   }, [status, modal, editing, form.phpIni])
 
   const sites = status?.inventory.sites || []
+  const tlsReadyCount = sites.filter((site) => site.tlsReady).length
   const visibleSites = useMemo(
     () =>
       sites.filter((site) => {
@@ -671,6 +672,7 @@ function App() {
         onClick={() => setModal("history")}>
         <Clock3 size={17} /> Activity log
       </button>
+      <ProtectionSources sources={security?.sources} />
       <div className="sidebar-bottom">
         <button
           className="help-card"
@@ -888,8 +890,8 @@ function App() {
             <Stat
               icon={<LockKeyhole />}
               label="TLS READY"
-              value="—"
-              detail="Certificate check pending"
+              value={status ? `${tlsReadyCount}/${sites.length}` : "—"}
+              detail={status ? "Sites with valid local certificates" : "Certificate check pending"}
               tint="purple"
             />
           </section>
@@ -2200,6 +2202,27 @@ function App() {
                 </span>
               </div>
             </div>
+            {plan.curatorV2Goal && (
+              <section
+                className="curator-goal-preview"
+                aria-labelledby="curator-goal-preview-title">
+                <div className="curator-goal-preview-heading">
+                  <ShieldCheck size={17} />
+                  <b id="curator-goal-preview-title">Curator V2 goal to record</b>
+                </div>
+                <p>{plan.curatorV2Goal.problem}</p>
+                <b>Success criteria (all begin open)</b>
+                <ul>
+                  {plan.curatorV2Goal.success_criteria.map((criterion) => (
+                    <li key={criterion.criterion_id}>
+                      <code>{criterion.criterion_id}</code>
+                      <span>{criterion.description}</span>
+                    </li>
+                  ))}
+                </ul>
+                <span>No criterion is marked verified by applying this plan.</span>
+              </section>
+            )}
             {plan.preserve?.length > 0 && (
               <div className="review-warning preserve-list">
                 <ShieldCheck size={17} />
@@ -2753,50 +2776,10 @@ function Stat({ icon, label, value, detail, tint }) {
     </div>
   )
 }
-function SecurityOverview({ security }) {
-  const summary = security?.summary
-  const sources = security?.sources
-  const formattedTime = security?.generatedAt
-    ? new Date(security.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : "—"
-  const metricCards = [
-    {
-      label: "WEB REQUESTS",
-      value: summary?.requests ?? "—",
-      detail: "Nginx access logs · 24 hours",
-      icon: <Globe2 />,
-    },
-    {
-      label: "ATTACK SIGNALS",
-      value: summary?.attackSignals ?? "—",
-      detail: "Exploit paths and scanner probes",
-      icon: <ShieldAlert />,
-    },
-    {
-      label: "FAILED SSH LOGINS",
-      value: summary?.failedLogins ?? "—",
-      detail: "SSH authentication failures · 24 hours",
-      icon: <ShieldAlert />,
-    },
-    {
-      label: "ACTIVE BLOCKS",
-      value: summary?.activeBlocks ?? "—",
-      detail: "CrowdSec IP decisions",
-      icon: <ShieldCheck />,
-    },
-    {
-      label: "WEB DENIALS",
-      value: summary?.deniedRequests ?? "—",
-      detail: "HTTP 401, 403, 429, 444",
-      icon: <AlertTriangle />,
-    },
-  ]
+function ProtectionSources({ sources }) {
   const protection = [
     { label: "Nginx access logs", value: sources?.nginx?.available ? "Reading" : "Unavailable" },
-    {
-      label: "CrowdSec service",
-      value: sources?.crowdsec?.active ? "Active" : "Unavailable",
-    },
+    { label: "CrowdSec service", value: sources?.crowdsec?.active ? "Active" : "Unavailable" },
     {
       label: "SSH authentication logs",
       value: sources?.ssh?.available ? "Reading" : "Unavailable",
@@ -2821,12 +2804,79 @@ function SecurityOverview({ security }) {
 
   return (
     <section
+      className="sidebar-protection"
+      aria-labelledby="protection-title">
+      <div className="sidebar-protection-heading">
+        <h2 id="protection-title">Protection sources</h2>
+        <p>Live status</p>
+      </div>
+      <ul className="protection-list">
+        {protection.map((source) => (
+          <li key={source.label}>
+            <span>{source.label}</span>
+            <span className="sidebar-protection-status">{source.value}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function SecurityOverview({ security }) {
+  const [showAllSources, setShowAllSources] = useState(false)
+  const summary = security?.summary
+  const sources = security?.sources
+  const sourceRows = security?.topSources || []
+  const visibleSources = showAllSources ? sourceRows : sourceRows.slice(0, 10)
+  const formattedTime = security?.generatedAt
+    ? new Date(security.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "—"
+  const metricCards = [
+    {
+      label: "ORIGIN WEB REQUESTS",
+      value: summary?.requests ?? "—",
+      detail: "Nginx access logs · last 24 hours",
+      icon: <Globe2 />,
+    },
+    {
+      label: "ORIGIN ATTACK SIGNALS",
+      value: summary?.attackSignals ?? "—",
+      detail: "Exploit paths and scanner probes",
+      icon: <ShieldAlert />,
+    },
+    {
+      label: "FAILED SSH LOGINS",
+      value: summary?.failedLogins ?? "—",
+      detail: "SSH authentication failures · 24 hours",
+      icon: <ShieldAlert />,
+    },
+    {
+      label: "ACTIVE ORIGIN BLOCKS",
+      value: summary?.activeBlocks ?? "—",
+      detail: "CrowdSec decisions and permanent origin bans",
+      icon: <ShieldCheck />,
+    },
+    {
+      label: "ORIGIN WEB DENIALS",
+      value: summary?.deniedRequests ?? "—",
+      detail: "HTTP 401, 403, 429, 444",
+      icon: <AlertTriangle />,
+    },
+    {
+      label: "ORIGIN SERVER ERRORS",
+      value: summary?.serverErrors ?? "—",
+      detail: "HTTP 5xx in Nginx logs · last 24 hours",
+      icon: <AlertTriangle />,
+    },
+  ]
+  return (
+    <section
       className="security-panel"
       aria-labelledby="security-title">
       <header className="security-heading">
         <div>
-          <div className="eyebrow">THREAT MONITORING · LAST 24 HOURS</div>
-          <h2 id="security-title">Attacks and blocks</h2>
+          <div className="eyebrow">ORIGIN & HOST MONITORING · LAST 24 HOURS</div>
+          <h2 id="security-title">Origin attacks and blocks</h2>
         </div>
         <div className="security-updated">
           {security?.error ? "Metrics unavailable" : `Updated ${formattedTime}`}
@@ -2863,34 +2913,45 @@ function SecurityOverview({ security }) {
               <div className="security-card-heading">
                 <div>
                   <h3 id="security-sources-title">Source IPs and countries</h3>
-                  <p>IPs with SSH failures, web signals, denials, or an active block.</p>
+                  <p>
+                    Lifetime counts and last 24 hours for web signals, denials, and SSH failures.
+                  </p>
                 </div>
                 <span className="security-pill">{summary?.uniqueAttackIps ?? 0} source IPs</span>
               </div>
-              {security?.topSources?.length ? (
+              {sourceRows.length ? (
                 <div className="security-table-scroll">
                   <table className="security-table">
                     <caption className="security-visually-hidden">
-                      SSH failures, web attack signals, and active blocks grouped by source IP
+                      Lifetime and last 24 hour web signals, denials, and SSH failures grouped by
+                      source IP
                     </caption>
                     <thead>
                       <tr>
                         <th scope="col">Source IP</th>
                         <th scope="col">Country</th>
-                        <th scope="col">Signals</th>
-                        <th scope="col">SSH failures</th>
+                        <th scope="col">Lifetime signals</th>
+                        <th scope="col">Lifetime denials</th>
+                        <th scope="col">Lifetime SSH failures</th>
+                        <th scope="col">24h signals</th>
+                        <th scope="col">24h denials</th>
+                        <th scope="col">24h SSH failures</th>
                         <th scope="col">Status</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {security.topSources.map((source) => (
+                    <tbody id="security-source-table">
+                      {visibleSources.map((source) => (
                         <tr key={source.ip}>
                           <td>
                             <code>{source.ip}</code>
                           </td>
                           <td>{source.country || "Unknown"}</td>
-                          <td>{source.attackSignals.toLocaleString()}</td>
-                          <td>{(source.failedLogins ?? 0).toLocaleString()}</td>
+                          <td>{(source.lifetime?.attackSignals ?? 0).toLocaleString()}</td>
+                          <td>{(source.lifetime?.deniedRequests ?? 0).toLocaleString()}</td>
+                          <td>{(source.lifetime?.failedLogins ?? 0).toLocaleString()}</td>
+                          <td>{(source.last24h?.attackSignals ?? 0).toLocaleString()}</td>
+                          <td>{(source.last24h?.deniedRequests ?? 0).toLocaleString()}</td>
+                          <td>{(source.last24h?.failedLogins ?? 0).toLocaleString()}</td>
                           <td>
                             <span className="security-pill">
                               {source.permanent
@@ -2904,6 +2965,15 @@ function SecurityOverview({ security }) {
                       ))}
                     </tbody>
                   </table>
+                  {sourceRows.length > 10 && (
+                    <button
+                      aria-controls="security-source-table"
+                      aria-expanded={showAllSources}
+                      className="button compact security-show-all"
+                      onClick={() => setShowAllSources((visible) => !visible)}>
+                      {showAllSources ? "Show first 10" : `Show all ${sourceRows.length} sources`}
+                    </button>
+                  )}
                 </div>
               ) : (
                 <p className="security-empty">
@@ -2911,34 +2981,17 @@ function SecurityOverview({ security }) {
                 </p>
               )}
               <p className="security-note">
-                {sources?.geoip?.available
-                  ? "Country labels use the local GeoIP database. No external IP lookup is performed."
-                  : (sources?.geoip?.reason ??
-                    "Country data is unknown until a GeoIP database is installed.")}
+                {`Lifetime counts use available retained Nginx logs and persisted totals as logs rotate. SSH totals use retained journal history and persist new failures. Older records deleted before tracking began cannot be recovered. ${sources?.geoip?.available ? "Country labels use the local GeoIP database; no external lookup is performed." : (sources?.geoip?.reason ?? "Country data is unknown until a GeoIP database is installed.")}`}
               </p>
             </section>
-            <aside
-              className="security-detail-card protection-card"
-              aria-labelledby="protection-title">
-              <div className="security-card-heading">
-                <div>
-                  <h3 id="protection-title">Protection sources</h3>
-                  <p>Live status of the systems feeding these counts.</p>
-                </div>
-              </div>
-              <ul className="protection-list">
-                {protection.map((source) => (
-                  <li key={source.label}>
-                    <span>{source.label}</span>
-                    <span className="security-pill">{source.value}</span>
-                  </li>
-                ))}
-              </ul>
-            </aside>
           </div>
           <p className="security-method-note">
             Attack signals are requests to known exploit paths or known scanner clients. They do not
-            by themselves confirm a compromise. Active blocks are current CrowdSec IP decisions.
+            by themselves confirm a compromise. Active blocks include current CrowdSec decisions and
+            permanent origin bans. These are origin and host metrics: OneShield edge requests,
+            blocks, and 502 responses are not included unless a verified OneShield export is
+            connected. Edge 502 responses indicate failed requests and are counted separately from
+            attack signals.
           </p>
         </>
       )}

@@ -987,6 +987,21 @@ function recordCuratorV2(config, operationId, receipt) {
     manifest.operations = (manifest.operations || []).map((operation) => {
       if (operation.id !== operationId) return operation
       updated = { ...operation, curatorV2: receipt }
+      if (receipt.status === "received") delete updated.curatorRequest
+      return updated
+    })
+  })
+  return updated
+}
+
+function recordCuratorV2Request(config, operationId, request) {
+  let updated = null
+  writeManifest(config, (manifest) => {
+    manifest.operations = (manifest.operations || []).map((operation) => {
+      if (operation.id !== operationId) return operation
+      const existing = operation.curatorRequest
+      if (existing && JSON.stringify(existing) !== JSON.stringify(request)) return operation
+      updated = { ...operation, curatorRequest: request }
       return updated
     })
   })
@@ -1123,6 +1138,7 @@ module.exports = {
   archiveExamples,
   history,
   recordCuratorV2,
+  recordCuratorV2Request,
   recordFailedRollback,
   recordOperation,
   recoverInterruptedSslRenewals,

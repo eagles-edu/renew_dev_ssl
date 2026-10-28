@@ -22,6 +22,13 @@ SCRIPT_PRODUCERS = {
     "domain_inventory_refresh": "domain inventory refresh",
     "nginx_vhost_setup": "Nginx vhost setup",
 }
+CRITERIA = {
+    "nginx_valid": "The generated Nginx configuration passes validation.",
+    "ols_valid": "The generated OpenLiteSpeed configuration passes validation.",
+    "site_reachable": "The configured site returns a navigable response after reload.",
+    "operation_recorded": "Vhost Manager records the requested operation outcome.",
+    "human_review": "A human reviews this Vhost Manager operation outcome.",
+}
 
 
 def _receipt_from_result(result: Any, event_id: str) -> dict[str, str]:
@@ -47,6 +54,42 @@ def _receipt_from_result(result: Any, event_id: str) -> dict[str, str]:
                 "status": receipt["status"],
             }
     raise RuntimeError("Curator V2 returned no matching durable event receipt")
+
+
+def _goal_request(payload: dict[str, Any], summary: str) -> tuple[str, list[dict[str, str]]]:
+    request = payload.get("request")
+    if request is None:
+        return summary[:2000], [{
+            "criterion_id": "human_review",
+            "description": CRITERIA["human_review"],
+        }]
+    if not isinstance(request, dict) or set(request) != {"problem", "criterion_ids"}:
+        raise ValueError("invalid source request")
+    problem = request["problem"]
+    ids = request["criterion_ids"]
+    if (
+        not isinstance(problem, str)
+        or not problem.strip()
+        or len(problem) > 2000
+        or "\n" in problem
+        or "\r" in problem
+        or not isinstance(ids, list)
+        or not ids
+        or len(ids) > 8
+        or any(not isinstance(item, str) or item not in CRITERIA for item in ids)
+        or len(set(ids)) != len(ids)
+    ):
+        raise ValueError("invalid source request")
+    criteria = [
+        {"criterion_id": item, "description": CRITERIA[item]}
+        for item in ids
+    ]
+    if "human_review" not in ids:
+        criteria.append({
+            "criterion_id": "human_review",
+            "description": CRITERIA["human_review"],
+        })
+    return problem.strip(), criteria
 
 
 async def _send(
@@ -192,16 +235,12 @@ def main() -> int:
         exit_code = operation.get("exitCode")
         if (is_ssl_renewal or is_ssl_cron or is_script) and isinstance(exit_code, int):
             summary += f" (exit code {exit_code})"
+        problem, criteria = _goal_request(payload, summary)
         event = {
             "event_id": event_id,
             "goal_id": goal_id,
-            "problem": summary[:2000],
-            "success_criteria": [
-                {
-                    "criterion_id": "human-review",
-                    "description": "A human reviews this Vhost Manager operation outcome.",
-                }
-            ],
+            "problem": problem,
+            "success_criteria": criteria,
             # The operation has already completed. Keep its review goal active
             # so Curator accepts the compact outcome fact, then let a human
             # review and disposition it.
