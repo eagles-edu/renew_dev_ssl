@@ -48,7 +48,7 @@
     "eslint": "^10.0.0",
     "globals": "^17.3.0",
     "prettier": "^3.8.1",
-    "vite": "^8.3.3"
+    "vite": "^8.3.5"
   },
   "dependencies": {
     "lucide-react": "^1.53.0",
