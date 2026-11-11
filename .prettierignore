@@ -1,4 +1,6 @@
 .codacy/
+.curatormd-v2/
+.pytest_cache/
 acme_dns_manual_nginx_swap.sh
 .playwright-cli/
 .playwright-mcp/

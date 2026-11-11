@@ -157,3 +157,25 @@ Review ambiguous or conflicting candidates; do not commit automatically.
 
 <!-- curatormd:record_id=963626379ccb42349c4d433304ad2ff8;content_sha256=ed4463a6cb85c5c4810014087a22554d34b7114a7f03fd593d3636613e84d860 -->
 <!-- curatormd:fingerprint=a4460465f040abd439ce2cff6cf29d6f8e053189a324102bc517b570dad1d740 -->
+
+## Recover a Codex VS Code UI that will not start
+
+**Diagnosis:** The Codex panel shows "Codex could not start its user interface." Check `~/.config/Code/logs/<session>/window*/exthost/openai.chatgpt/Codex.log` for `renderer_ready_timeout`. Check the `thread_hydration` span for a large `history_ready` value. Confirm the app-server, config, and DB integrity are healthy first. Use `PRAGMA quick_check` in read-only mode.
+
+**Root cause pattern:** On startup the webview resumes the last open thread. If that thread's history is very large, hydration exceeds the 30 s renderer timeout. Measure size with `SELECT thread_id, count(*), sum(length(item_json)) FROM thread_items GROUP BY thread_id` on `~/.codex/thread_history_1.sqlite`.
+
+**Safe fix order:** Close the Codex panel first, because the app-server writes to the same DB. Back up `thread_history_1.sqlite` and `state_5.sqlite` with the sqlite3 backup API into a Desktop archive folder. Copy the matching rollout `.jsonl` files and verify each copy with `cmp`. Only then trim old rows, and record the trimmed rows in the archive. Never move or delete rollout files. Their byte offsets are tracked by `thread_history_projection_state`, so editing them can desync the projection.
+
+**Verification:** Re-run `quick_check`, confirm row counts, reopen the panel, and check that the new `renderer_ready_timeout` entry no longer appears in `Codex.log`.
+
+## Work reported problems through to verified resolution
+
+**Added:** 2026-11-11
+
+When the owner provides evidence of a problem or a degraded project-health state, treat it as a request to resolve the underlying issue. Keep working after the first failed tool call: identify what failed, inspect its permission and runtime boundary, and use the existing authorized project-bound recovery path where one exists. A denial from one adapter is an obstacle to diagnose, not a reason to stop or to report that no work was done.
+
+Retry only already-approved work through its configured least-privilege path. Do not create new approvals, broaden the target, or bypass safety controls. A successful command is not enough: re-read the user-visible health or behavior that exposed the problem. If the operation succeeded but the reported state remains degraded, continue into the probe, projection, or reporting path and repair the confirmed cause. State completion only after the original success check passes.
+
+If every supported recovery path is exhausted or requires an owner decision, report the specific remaining barrier and the work already completed. Do not end at a generic permission error, an unverified service exit, or an unsupported claim that the problem is fixed.
+
+**Example:** A Curator retry endpoint rejected the caller, but the project had a configured reviewed-purge maintenance service. Running that service was safe because it only retries previously approved work. When its successful empty pass did not clear the health gate, inspection showed that Hermes checked a monotonic timer timestamp that the calendar timer reports as zero; using the timer's realtime timestamp restored a healthy profile probe. This sequence illustrates the required persistence through an initial error and through a successful operation that did not yet satisfy the user's original success check.

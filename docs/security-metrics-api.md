@@ -51,4 +51,25 @@
 
 The endpoint reads Nginx access logs and CrowdSec decisions using fixed local paths and fixed commands. GeoIP lookups use `/usr/bin/geoiplookup` with `/usr/share/GeoIP/GeoIP.dat` for IPv4 and `/usr/share/GeoIP/GeoIPv6.dat` for IPv6; they run on the server and are cached by source IP. The endpoint never returns raw log lines or request query strings.
 
+## Dashboard time series and breakdowns
+
+### Problem statement
+
+Zero activity is hard to interpret without source freshness, and the dashboard does not expose the time-series and country breakdowns needed to review origin activity.
+
+### Success statement
+
+An operator can tell a genuine quiet period from stale or unavailable telemetry, review origin blocks and traffic in three tabs, adjust chart ranges, and identify known countries with flags, names, and ISO codes. Values identify their source and timezone; unavailable history and country data remain explicit.
+
+### Deferred follow-up
+
+Plan OneShield edge analytics after the origin freshness, blocks, charts, and country/attack breakdown work is complete and verified. Keep edge and origin counts separate, and give the edge integration its own problem and success statements before implementation.
+
+- `sources.nginx.lastEventAt` and `sources.ssh.lastEventAt` report the latest parsed event timestamp; `available` only means the source can be read. The UI displays availability and event freshness separately in UTC+7.
+- `summary.successfulLogins` counts accepted SSH password and public-key logins from `ssh.service` journal entries in the last 24 hours.
+- `hourly` contains UTC-hour buckets with requests, normal requests, attack signals, denials, server errors, SSH failures, SSH successes, attack-type counts, and active-block snapshots. The dashboard persists up to 168 hours in its private local state file. History starts when this collection is enabled; missing earlier buckets are not reconstructed.
+- `countries` ranks countries found in retained Nginx log country fields and locally resolves the 2,000 highest-request source IPs for retained normal-traffic attribution. `retainedNormalRequests` supports the normal-traffic country table, and `lifetimeAttackSignals` supports attack-source ranking. Country flags are shown only for valid ISO alpha-2 codes.
+- `attackTypes` counts retained-log matches for exploit paths, scanner user agents, and unusual HTTP methods. These are classified signals, not confirmed malicious activity. Counts cover retained logs available to the dashboard.
+- Block timestamps use decision creation time when CrowdSec supplies it. Permanent IP-only ban files have no per-entry timestamp, so the UI identifies those as active at the current snapshot rather than inventing a ban time.
+
 These are origin and host metrics. OneShield edge requests, WAF blocks, rate-limit events, and edge HTTP 5xx responses are not included unless a verified OneShield export is connected. Keep edge status and origin status separate; an edge 502 is an availability failure and does not by itself establish an attack or an origin Nginx 5xx.

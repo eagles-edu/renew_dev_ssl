@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { createRoot } from "react-dom/client"
 import starterPolicy from "../../shared/csp-policy.txt?raw"
+import "flag-icons/css/flag-icons.min.css"
 import {
   Activity,
   AlertTriangle,
@@ -20,6 +21,8 @@ import {
   LogOut,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -47,6 +50,36 @@ function isUhdDisplay() {
 
 function recommendedTextScale(isUhd) {
   return isUhd ? 2 : 1.75
+}
+
+function CountryCell({ source, compact = false }) {
+  const countryCode = /^[A-Z]{2}$/.test(String(source.countryCode || "").toUpperCase())
+    ? String(source.countryCode).toLowerCase()
+    : null
+  const countryName = source.country || "Unknown"
+  return (
+    <span
+      className={`security-country ${compact ? "security-country-compact" : ""}`}
+      title={compact ? countryName : undefined}
+      aria-label={compact ? countryName : undefined}>
+      {countryCode ? (
+        <span
+          className={`fi fi-${countryCode}`}
+          aria-hidden="true"
+        />
+      ) : null}
+      {compact ? (
+        <b>{countryCode?.toUpperCase() || "--"}</b>
+      ) : (
+        <span>
+          {countryName}
+          {countryCode ? (
+            <span className="security-country-code"> ({countryCode.toUpperCase()})</span>
+          ) : null}
+        </span>
+      )}
+    </span>
+  )
 }
 
 function phpFormValues(options, profile) {
@@ -144,6 +177,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
   const [mobileNav, setMobileNav] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [detailExpanded, setDetailExpanded] = useState(false)
   const [siteDetails, setSiteDetails] = useState(null)
   const [databaseCredentials, setDatabaseCredentials] = useState(null)
@@ -664,11 +698,13 @@ function App() {
       <div className="nav-label">WORKSPACE</div>
       <button
         className="nav-item active"
+        title="Overview"
         onClick={resetFilters}>
         <LayoutDashboard size={17} /> Overview <span className="nav-dot" />
       </button>
       <button
         className="nav-item"
+        title="Activity log"
         onClick={() => setModal("history")}>
         <Clock3 size={17} /> Activity log
       </button>
@@ -715,7 +751,7 @@ function App() {
   )
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className={`sidebar ${mobileNav ? "show" : ""}`}>{nav}</aside>
       {mobileNav && (
         <button
@@ -726,6 +762,14 @@ function App() {
       )}
       <main className="main-area">
         <header className="topbar">
+          <button
+            className="sidebar-toggle icon-button"
+            aria-label={sidebarCollapsed ? "Expand navigation panel" : "Collapse navigation panel"}
+            aria-pressed={sidebarCollapsed}
+            title={sidebarCollapsed ? "Expand navigation panel" : "Collapse navigation panel"}
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+            {sidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
+          </button>
           <button
             className="mobile-menu icon-button"
             aria-label="Open menu"
@@ -2822,15 +2866,146 @@ function ProtectionSources({ sources }) {
   )
 }
 
+function formatSecurityTime(value, options = {}) {
+  if (!value) return "—"
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...options,
+  }).format(new Date(value))
+}
+
+function securityAge(value) {
+  if (!value) return ""
+  const ageMinutes = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 60_000))
+  if (ageMinutes < 60) return `${ageMinutes}m ago`
+  const ageHours = Math.floor(ageMinutes / 60)
+  if (ageHours < 48) return `${ageHours}h ago`
+  return `${Math.floor(ageHours / 24)}d ago`
+}
+
+function SecurityLineChart({ title, data, field, color }) {
+  const values = data.map((point) => (Number.isFinite(point[field]) ? point[field] : null))
+  const known = values.filter((value) => value !== null)
+  const max = Math.max(1, ...known)
+  const points = values
+    .map((value, index) =>
+      value === null
+        ? null
+        : `${40 + (index * 820) / Math.max(1, values.length - 1)},${230 - (value / max) * 200}`
+    )
+    .filter(Boolean)
+    .join(" ")
+  return (
+    <article className="security-chart-card">
+      <div className="security-card-heading">
+        <h3>{title}</h3>
+        <span>{known.length ? `Peak ${max.toLocaleString()}` : "No stored history"}</span>
+      </div>
+      <svg
+        viewBox="0 0 900 280"
+        role="img"
+        aria-label={`${title} by hour, counts`}>
+        <path
+          d="M40 30V230H860"
+          className="security-chart-axis"
+        />
+        <path
+          d="M40 180H860M40 130H860M40 80H860M40 30H860"
+          className="security-chart-grid"
+        />
+        <text
+          x="4"
+          y="34">
+          {max.toLocaleString()}
+        </text>
+        <text
+          x="20"
+          y="234">
+          0
+        </text>
+        {points && (
+          <polyline
+            points={points}
+            fill="none"
+            stroke={color}
+            strokeWidth="4"
+          />
+        )}
+        {data.length > 0 && (
+          <>
+            <text
+              x="40"
+              y="260">
+              {formatSecurityTime(data[0].hour, {
+                day: "2-digit",
+                month: "short",
+                hour: "2-digit",
+              })}
+            </text>
+            <text
+              x="760"
+              y="260">
+              {formatSecurityTime(data.at(-1).hour, {
+                day: "2-digit",
+                month: "short",
+                hour: "2-digit",
+              })}
+            </text>
+          </>
+        )}
+      </svg>
+      <p>Count per hour · x-axis: time (UTC+7) · y-axis: count</p>
+    </article>
+  )
+}
+
+function SecurityTypeChart({ items }) {
+  const max = Math.max(1, ...items.map((item) => item.count))
+  return (
+    <div
+      className="security-type-chart"
+      role="img"
+      aria-label="Retained attack signals by type">
+      {items.map((item) => (
+        <div
+          className="security-type-bar"
+          key={item.type}>
+          <span>{item.type}</span>
+          <div>
+            <i style={{ width: `${(item.count / max) * 100}%` }} />
+          </div>
+          <b>{item.count.toLocaleString()}</b>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function SecurityOverview({ security }) {
-  const [showAllSources, setShowAllSources] = useState(false)
+  const [activeTab, setActiveTab] = useState("blocks")
+  const [rangeHours, setRangeHours] = useState(24)
   const summary = security?.summary
   const sources = security?.sources
   const sourceRows = security?.topSources || []
-  const visibleSources = showAllSources ? sourceRows : sourceRows.slice(0, 10)
-  const formattedTime = security?.generatedAt
-    ? new Date(security.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : "—"
+  const blockRows = sourceRows.filter((source) => source.blocked)
+  const hourly = security?.hourly || []
+  const cutoff = Date.now() - rangeHours * 60 * 60 * 1000
+  const chartData = hourly.filter((point) => Date.parse(point.hour) >= cutoff)
+  const countries = [...(security?.countries || [])].sort(
+    (a, b) =>
+      b.lifetimeAttackSignals - a.lifetimeAttackSignals ||
+      b.retainedNormalRequests - a.retainedNormalRequests
+  )
+  const attackCountries = [...countries]
+    .sort((a, b) => b.lifetimeAttackSignals - a.lifetimeAttackSignals)
+    .slice(0, 20)
+  const normalCountries = [...countries]
+    .sort((a, b) => b.retainedNormalRequests - a.retainedNormalRequests)
+    .slice(0, 20)
   const metricCards = [
     {
       label: "ORIGIN WEB REQUESTS",
@@ -2869,6 +3044,57 @@ function SecurityOverview({ security }) {
       icon: <AlertTriangle />,
     },
   ]
+  const freshness = [
+    {
+      name: "Nginx access logs",
+      available: sources?.nginx?.available,
+      time: sources?.nginx?.lastEventAt,
+    },
+    { name: "SSH journal", available: sources?.ssh?.available, time: sources?.ssh?.lastEventAt },
+    {
+      name: "CrowdSec decisions",
+      available: sources?.crowdsec?.decisionsAvailable,
+      time: security?.generatedAt,
+      snapshot: true,
+    },
+  ]
+  const renderCountryTable = (rows, valueField, heading) => (
+    <section className="security-detail-card">
+      <div className="security-card-heading">
+        <h3>{heading}</h3>
+        <span>Retained origin logs</span>
+      </div>
+      {rows.length ? (
+        <div className="security-table-scroll security-compact-table-scroll">
+          <table className="security-table security-compact-table">
+            <thead>
+              <tr>
+                <th scope="col">Country</th>
+                <th scope="col">Count</th>
+                <th scope="col">Signals</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((country) => (
+                <tr key={`${heading}-${country.code}`}>
+                  <td>
+                    <CountryCell
+                      source={{ country: country.name, countryCode: country.code }}
+                      compact
+                    />
+                  </td>
+                  <td>{(country[valueField] || 0).toLocaleString()}</td>
+                  <td>{(country.lifetimeAttackSignals || 0).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="security-empty">No country-tagged requests are available in retained logs.</p>
+      )}
+    </section>
+  )
   return (
     <section
       className="security-panel"
@@ -2879,7 +3105,9 @@ function SecurityOverview({ security }) {
           <h2 id="security-title">Origin attacks and blocks</h2>
         </div>
         <div className="security-updated">
-          {security?.error ? "Metrics unavailable" : `Updated ${formattedTime}`}
+          {security?.error
+            ? "Metrics unavailable"
+            : `Updated ${formatSecurityTime(security?.generatedAt, { year: undefined })} (UTC+7)`}
         </div>
       </header>
       {security?.error ? (
@@ -2890,6 +3118,27 @@ function SecurityOverview({ security }) {
         </p>
       ) : (
         <>
+          <div
+            className="security-freshness"
+            aria-label="Data source freshness">
+            {freshness.map((source) => (
+              <div
+                className="security-freshness-item"
+                key={source.name}>
+                <span
+                  className={`security-freshness-dot ${source.available ? "available" : "unavailable"}`}
+                />
+                <b>{source.name}</b>
+                <span>
+                  {!source.available
+                    ? "Unavailable"
+                    : source.time
+                      ? `${source.snapshot ? "Snapshot" : "Latest event"} ${formatSecurityTime(source.time)} (UTC+7)${source.snapshot ? "" : ` · ${securityAge(source.time)}`}`
+                      : "Readable · no events recorded"}
+                </span>
+              </div>
+            ))}
+          </div>
           <div className="security-metrics">
             {metricCards.map((metric) => (
               <article
@@ -2906,92 +3155,187 @@ function SecurityOverview({ security }) {
               </article>
             ))}
           </div>
-          <div className="security-details">
+          <div
+            className="security-tabs"
+            role="tablist"
+            aria-label="Origin security views">
+            {[
+              { id: "blocks", label: "Blocks" },
+              { id: "charts", label: "Charts" },
+              { id: "breakdowns", label: "Countries & attack types" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`security-panel-${tab.id}`}
+                className={`security-tab ${activeTab === tab.id ? "active" : ""}`}
+                onClick={() => setActiveTab(tab.id)}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div
+            id="security-panel-blocks"
+            role="tabpanel"
+            hidden={activeTab !== "blocks"}>
             <section
               className="security-detail-card"
-              aria-labelledby="security-sources-title">
+              aria-labelledby="security-blocks-title">
               <div className="security-card-heading">
                 <div>
-                  <h3 id="security-sources-title">Source IPs and countries</h3>
-                  <p>
-                    Lifetime counts and last 24 hours for web signals, denials, and SSH failures.
-                  </p>
+                  <h3 id="security-blocks-title">Active origin blocks</h3>
+                  <p>Snapshot generated {formatSecurityTime(security?.generatedAt)} (UTC+7)</p>
                 </div>
-                <span className="security-pill">{summary?.uniqueAttackIps ?? 0} source IPs</span>
+                <span className="security-pill">{blockRows.length} blocked IPs</span>
               </div>
-              {sourceRows.length ? (
+              {blockRows.length ? (
                 <div className="security-table-scroll">
                   <table className="security-table">
-                    <caption className="security-visually-hidden">
-                      Lifetime and last 24 hour web signals, denials, and SSH failures grouped by
-                      source IP
-                    </caption>
                     <thead>
                       <tr>
                         <th scope="col">Source IP</th>
                         <th scope="col">Country</th>
-                        <th scope="col">Lifetime signals</th>
-                        <th scope="col">Lifetime denials</th>
-                        <th scope="col">Lifetime SSH failures</th>
-                        <th scope="col">24h signals</th>
-                        <th scope="col">24h denials</th>
-                        <th scope="col">24h SSH failures</th>
-                        <th scope="col">Status</th>
+                        <th scope="col">Reason</th>
+                        <th scope="col">Block time</th>
+                        <th scope="col">Type</th>
                       </tr>
                     </thead>
-                    <tbody id="security-source-table">
-                      {visibleSources.map((source) => (
+                    <tbody>
+                      {blockRows.map((source) => (
                         <tr key={source.ip}>
                           <td>
                             <code>{source.ip}</code>
                           </td>
-                          <td>{source.country || "Unknown"}</td>
-                          <td>{(source.lifetime?.attackSignals ?? 0).toLocaleString()}</td>
-                          <td>{(source.lifetime?.deniedRequests ?? 0).toLocaleString()}</td>
-                          <td>{(source.lifetime?.failedLogins ?? 0).toLocaleString()}</td>
-                          <td>{(source.last24h?.attackSignals ?? 0).toLocaleString()}</td>
-                          <td>{(source.last24h?.deniedRequests ?? 0).toLocaleString()}</td>
-                          <td>{(source.last24h?.failedLogins ?? 0).toLocaleString()}</td>
+                          <td>
+                            <CountryCell source={source} />
+                          </td>
+                          <td>
+                            {source.scenario ||
+                              (source.permanent ? "Permanent origin ban" : "CrowdSec decision")}
+                          </td>
+                          <td>
+                            {source.blockedAt
+                              ? `${formatSecurityTime(source.blockedAt)} (UTC+7)`
+                              : source.lastSeen
+                                ? `${formatSecurityTime(source.lastSeen)} (last observed)`
+                                : `Active at snapshot · ${formatSecurityTime(security?.generatedAt)} (UTC+7)`}
+                          </td>
                           <td>
                             <span className="security-pill">
-                              {source.permanent
-                                ? "Permanent"
-                                : source.blocked
-                                  ? "Blocked"
-                                  : "Observed"}
+                              {source.permanent ? "Permanent" : "Temporary"}
                             </span>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  {sourceRows.length > 10 && (
-                    <button
-                      aria-controls="security-source-table"
-                      aria-expanded={showAllSources}
-                      className="button compact security-show-all"
-                      onClick={() => setShowAllSources((visible) => !visible)}>
-                      {showAllSources ? "Show first 10" : `Show all ${sourceRows.length} sources`}
-                    </button>
-                  )}
                 </div>
               ) : (
                 <p className="security-empty">
-                  No SSH failures, web attack signals, or denials in this 24-hour window.
+                  No active origin blocks were returned by the configured sources.
                 </p>
               )}
-              <p className="security-note">
-                {`Lifetime counts use available retained Nginx logs and persisted totals as logs rotate. SSH totals use retained journal history and persist new failures. Older records deleted before tracking began cannot be recovered. ${sources?.geoip?.available ? "Country labels use the local GeoIP database; no external lookup is performed." : (sources?.geoip?.reason ?? "Country data is unknown until a GeoIP database is installed.")}`}
-              </p>
             </section>
           </div>
+          <div
+            id="security-panel-charts"
+            role="tabpanel"
+            hidden={activeTab !== "charts"}>
+            <div className="security-chart-toolbar">
+              <label htmlFor="security-range">Time range</label>
+              <select
+                id="security-range"
+                value={rangeHours}
+                onChange={(event) => setRangeHours(Number(event.target.value))}>
+                <option value={24}>24 hours</option>
+                <option value={72}>3 days</option>
+                <option value={168}>7 days</option>
+              </select>
+              <span>
+                History begins{" "}
+                {formatSecurityTime(security?.history?.availableFrom, { year: undefined })} (UTC+7);
+                earlier data was not stored.
+              </span>
+            </div>
+            {chartData.length ? (
+              <div className="security-chart-grid">
+                <SecurityLineChart
+                  title="Active blocks · hourly snapshot"
+                  data={chartData}
+                  field="activeBlocks"
+                  color="#b65d28"
+                />
+                <SecurityLineChart
+                  title="SSH failures"
+                  data={chartData}
+                  field="failedLogins"
+                  color="#bf3d35"
+                />
+                <SecurityLineChart
+                  title="SSH successes"
+                  data={chartData}
+                  field="successfulLogins"
+                  color="#25825b"
+                />
+                <SecurityLineChart
+                  title="Normal web traffic"
+                  data={chartData}
+                  field="normalRequests"
+                  color="#287eab"
+                />
+                <SecurityLineChart
+                  title="Suspicious web traffic"
+                  data={chartData}
+                  field="attackSignals"
+                  color="#9d3e91"
+                />
+              </div>
+            ) : (
+              <p className="security-empty">No stored hourly history is available yet.</p>
+            )}
+          </div>
+          <div
+            id="security-panel-breakdowns"
+            role="tabpanel"
+            hidden={activeTab !== "breakdowns"}>
+            <div className="security-breakdown-grid">
+              {renderCountryTable(
+                attackCountries,
+                "lifetimeAttackSignals",
+                "Top 20 attack-source countries to date"
+              )}
+              {renderCountryTable(
+                normalCountries,
+                "retainedNormalRequests",
+                "Top 20 normal-traffic countries"
+              )}
+              <section className="security-detail-card">
+                <div className="security-card-heading">
+                  <div>
+                    <h3>Attack signals by type</h3>
+                    <p>Classified request patterns in retained Nginx logs</p>
+                  </div>
+                </div>
+                {(security?.attackTypes || []).length ? (
+                  <SecurityTypeChart items={security.attackTypes} />
+                ) : (
+                  <p className="security-empty">No classified attack patterns in retained logs.</p>
+                )}
+              </section>
+            </div>
+            <p className="security-note">
+              Country totals use country codes in retained Nginx logs and local GeoIP for the 2,000
+              highest-request source IPs. They are limited to retained or tracked history; OneShield
+              edge traffic is not included.
+            </p>
+          </div>
           <p className="security-method-note">
-            Attack signals are requests to known exploit paths or known scanner clients. They do not
-            by themselves confirm a compromise. Active blocks include current CrowdSec decisions and
-            permanent origin bans. These are origin and host metrics: OneShield edge requests,
-            blocks, and 502 responses are not included unless a verified OneShield export is
-            connected. Edge 502 responses indicate failed requests and are counted separately from
-            attack signals.
+            Attack signals match known exploit paths, scanner clients, and unusual methods; they do
+            not by themselves confirm compromise. Normal web traffic excludes those signals and HTTP
+            401, 403, 429, and 444 denials. Active blocks are origin CrowdSec decisions and
+            permanent bans. OneShield edge activity is separate and not connected here.
           </p>
         </>
       )}

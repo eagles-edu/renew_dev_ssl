@@ -104,7 +104,9 @@
 <!-- curatormd-v2:goal:3a630079e8b4d7e75be932015e219170e887b02d6c95a2377b24149516a13c99:end -->
 
 <!-- curatormd-v2:goal:85ffc6e7039dd4cc802c00512371ffa2bb44881d15002aedcedb5e6c9652e33e:start -->
+
 ### Goal `vhost\-op\-65bb1c01\-11e3\-4cd3\-b73a\-57d0b7161d8c`
+
 - Project: `vhost\-manager\-alpha`
 - Problem: Create curator\-v2\-alpha\-smoke\-20261028\.test: Create the webroot and dedicated site account; create an Nginx static\-file config; enable only the ACME challenge vhost
 - Status: `active`
@@ -120,7 +122,9 @@
 <!-- curatormd-v2:goal:85ffc6e7039dd4cc802c00512371ffa2bb44881d15002aedcedb5e6c9652e33e:end -->
 
 <!-- curatormd-v2:goal:686f16d9d4f7ae771d486590ce0472c696097319eab14bcc57c44bf177f72bab:start -->
+
 ### Goal `vhost\-rollback\-b3cfa643\-c3e1\-456b\-89a8\-996479be6b4b`
+
 - Project: `vhost\-manager\-alpha`
 - Problem: Vhost Manager rolled back Rollback Create curator\-v2\-alpha\-smoke\-20261028\.test operation b3cfa643\-c3e1\-456b\-89a8\-996479be6b4b for curator\-v2\-alpha\-smoke\-20261028\.test
 - Status: `active`

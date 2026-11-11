@@ -246,6 +246,9 @@ button:disabled {
   margin-left: 270px;
   min-height: 100vh;
 }
+.sidebar-toggle {
+  flex: none;
+}
 .topbar {
   height: 58px;
   background: #fff;
@@ -2749,6 +2752,170 @@ html[data-theme="dark"] .app-shell .modal .file-action.remove {
 .security-details {
   display: block;
 }
+.security-freshness {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.security-freshness-item {
+  display: grid;
+  grid-template-columns: 9px 1fr;
+  gap: 2px 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #dfe4de;
+  border-radius: 7px;
+  background: #f7f8f6;
+  font-size: max(12px, calc(9px * var(--text-scale, 1)));
+}
+.security-freshness-item b {
+  grid-column: 2;
+}
+.security-freshness-item > span:last-child {
+  grid-column: 2;
+  color: #56645c;
+}
+.security-freshness-dot {
+  grid-row: 1 / span 2;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #b64c39;
+}
+.security-freshness-dot.available {
+  background: #27815d;
+}
+.security-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid #dfe4de;
+}
+.security-tab {
+  padding: 9px 13px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #3e5146;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.security-tab.active {
+  border-bottom-color: #00817b;
+  color: #006a64;
+}
+.security-chart-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: #56645c;
+  font-size: max(12px, calc(9px * var(--text-scale, 1)));
+}
+.security-chart-toolbar label {
+  font-weight: 700;
+}
+.security-chart-toolbar select {
+  padding: 6px 9px;
+  border: 1px solid #cbd4cc;
+  border-radius: 5px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+.security-chart-grid,
+.security-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.security-chart-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dfe4de;
+  border-radius: 8px;
+  background: #fff;
+}
+.security-chart-card .security-card-heading {
+  margin-bottom: 2px;
+}
+.security-chart-card .security-card-heading span,
+.security-chart-card p {
+  color: #56645c;
+  font-size: max(12px, calc(8px * var(--text-scale, 1)));
+}
+.security-chart-card svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+.security-chart-card svg text {
+  fill: #56645c;
+  font-size: 13px;
+}
+.security-chart-axis {
+  fill: none;
+  stroke: #86958a;
+  stroke-width: 1.5;
+}
+.security-chart-card svg .security-chart-grid {
+  stroke: #e5e9e5;
+  stroke-width: 1;
+}
+.security-chart-card p {
+  margin: 0;
+}
+.security-type-bar {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(80px, 2fr) 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 2px;
+  border-top: 1px solid #dfe4de;
+}
+.security-type-bar > div {
+  height: 12px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #e8ede9;
+}
+.security-type-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #b84f3f;
+}
+.security-type-bar b {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.security-breakdown-grid .security-detail-card {
+  align-self: start;
+}
+.security-table.security-compact-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+.security-table-scroll.security-compact-table-scroll {
+  overflow-x: visible;
+}
+.security-compact-table th,
+.security-compact-table td {
+  padding: 7px 4px;
+  overflow-wrap: anywhere;
+}
+.security-compact-table th:first-child {
+  width: 48%;
+}
+.security-compact-table th:nth-child(2),
+.security-compact-table th:nth-child(3) {
+  width: 26%;
+}
 .security-detail-card {
   min-width: 0;
   padding: 12px;
@@ -2789,6 +2956,29 @@ html[data-theme="dark"] .app-shell .modal .file-action.remove {
 }
 .security-table td {
   color: #26332b;
+}
+.security-country {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.security-country .fi {
+  flex: 0 0 auto;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(38 51 43 / 18%);
+}
+.security-country-code {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.security-country-compact {
+  gap: 5px;
+  white-space: nowrap;
+}
+.security-country-compact b {
+  font-size: 0.95em;
+  font-variant-numeric: tabular-nums;
 }
 .security-table code {
   font-size: 0.95em;
@@ -2843,11 +3033,104 @@ html[data-theme="dark"] .app-shell .modal .file-action.remove {
   }
 }
 @media (max-width: 780px) {
+  .sidebar-toggle {
+    display: none;
+  }
   .security-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .security-details {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .security-freshness,
+  .security-chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .security-breakdown-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+  }
+  .security-breakdown-grid .security-detail-card {
+    padding: 8px 5px;
+  }
+  .security-breakdown-grid .security-card-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .security-breakdown-grid .security-card-heading h3 {
+    overflow-wrap: anywhere;
+  }
+  .security-compact-table th,
+  .security-compact-table td {
+    padding: 6px 2px;
+    font-size: 11px;
+  }
+  .security-country {
+    align-items: flex-start;
+    gap: 3px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .security-country-code {
+    display: block;
+  }
+  .security-type-bar {
+    grid-template-columns: minmax(0, 1fr) minmax(8px, 0.6fr) 28px;
+    gap: 3px;
+    font-size: 11px;
+  }
+  .security-type-bar > span {
+    overflow-wrap: anywhere;
+  }
+  .security-type-bar b {
+    font-size: 10px;
+  }
+  .security-tabs {
+    overflow-x: auto;
+  }
+  .security-tab {
+    white-space: nowrap;
+  }
+}
+@media (min-width: 781px) {
+  .app-shell.sidebar-collapsed .sidebar {
+    width: 72px;
+    padding-left: 10px;
+    padding-right: 10px;
+    overflow-x: hidden;
+  }
+  .app-shell.sidebar-collapsed .main-area {
+    margin-left: 72px;
+  }
+  .app-shell.sidebar-collapsed .brand {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .app-shell.sidebar-collapsed .brand > div:last-child,
+  .app-shell.sidebar-collapsed .nav-label,
+  .app-shell.sidebar-collapsed .sidebar-protection,
+  .app-shell.sidebar-collapsed .help-card,
+  .app-shell.sidebar-collapsed .sidebar-user > div:nth-child(2),
+  .app-shell.sidebar-collapsed .sidebar-user > svg {
+    display: none;
+  }
+  .app-shell.sidebar-collapsed .nav-item {
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+  }
+  .app-shell.sidebar-collapsed .nav-item .nav-dot {
+    display: none;
+  }
+  .app-shell.sidebar-collapsed .sidebar-user {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .app-shell.sidebar-collapsed .runtime-actions .nav-item {
+    gap: 0;
   }
 }
 @media (max-width: 420px) {
@@ -2859,6 +3142,33 @@ html[data-theme="dark"] .app-shell .security-panel {
   border-color: #494949;
   background: #262626;
   color: #e4e9e5;
+}
+html[data-theme="dark"] .app-shell .security-freshness-item,
+html[data-theme="dark"] .app-shell .security-chart-card {
+  border-color: #494949;
+  background: #303030;
+}
+html[data-theme="dark"] .app-shell .security-freshness-item > span:last-child,
+html[data-theme="dark"] .app-shell .security-chart-card .security-card-heading span,
+html[data-theme="dark"] .app-shell .security-chart-card p,
+html[data-theme="dark"] .app-shell .security-chart-card svg text {
+  color: #b9c3bc;
+  fill: #b9c3bc;
+}
+html[data-theme="dark"] .app-shell .security-tabs {
+  border-color: #494949;
+}
+html[data-theme="dark"] .app-shell .security-tab {
+  color: #c5d0c8;
+}
+html[data-theme="dark"] .app-shell .security-tab.active {
+  color: #65d1c9;
+}
+html[data-theme="dark"] .app-shell .security-type-bar {
+  border-color: #494949;
+}
+html[data-theme="dark"] .app-shell .security-type-bar > div {
+  background: #454e48;
 }
 html[data-theme="dark"] .app-shell .security-metric,
 html[data-theme="dark"] .app-shell .security-detail-card {

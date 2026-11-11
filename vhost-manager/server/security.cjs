@@ -29,6 +29,7 @@ function emptyLifetimeState() {
     lifetimeSources: {},
     sshCursor: null,
     sshFailedLogins: {},
+    hourlyHistory: {},
     dirty: false,
   }
 }
@@ -46,6 +47,7 @@ function readLifetimeState(config) {
       processedLogArchives: state.processedLogArchives || {},
       lifetimeSources: state.lifetimeSources || {},
       sshFailedLogins: state.sshFailedLogins || {},
+      hourlyHistory: state.hourlyHistory || {},
       dirty: false,
     }
   } catch {
@@ -65,7 +67,9 @@ function writeLifetimeState(config, state) {
   } catch {
     try {
       fs.unlinkSync(temporary)
-    } catch {}
+    } catch {
+      return
+    }
   }
 }
 
@@ -240,16 +244,24 @@ function scanNginxLogs(config, now, lifetimeState) {
   const sources = new Map()
   const liveLifetimeSources = new Map()
   const countries = new Map()
+  const retainedAttackTypes = new Map()
+  const retainedTrafficByIp = new Map()
+  const currentHour = Math.floor(now / 3_600_000) * 3_600_000
   const hourly = Array.from({ length: 24 }, (_, index) => ({
-    hour: new Date(now - (23 - index) * 60 * 60 * 1000).toISOString().slice(0, 13) + ":00:00.000Z",
+    hour: new Date(currentHour - (23 - index) * 3_600_000).toISOString(),
     requests: 0,
     attackSignals: 0,
+    deniedRequests: 0,
+    normalRequests: 0,
+    serverErrors: 0,
+    attackTypes: {},
   }))
   let requests = 0
   let attackSignals = 0
   let deniedRequests = 0
   let serverErrors = 0
   let filesRead = 0
+  let latestLogAt = null
 
   for (const file of files) {
     let content
@@ -275,8 +287,27 @@ function scanNginxLogs(config, now, lifetimeState) {
       if (!record?.ip || !record.date || !Number.isFinite(record.status)) continue
       const timestamp = record.date.getTime()
       if (timestamp > now + 5 * 60_000) continue
+      if (!latestLogAt || timestamp > Date.parse(latestLogAt))
+        latestLogAt = record.date.toISOString()
       const attack = attackSignal(record)
       const denied = [401, 403, 429, 444].includes(record.status)
+      const traffic = retainedTrafficByIp.get(record.ip) || {
+        requests: 0,
+        normalRequests: 0,
+        countryCode: record.countryCode || null,
+      }
+      traffic.countryCode ||= record.countryCode || null
+      traffic.requests += 1
+      if (!attack && !denied) traffic.normalRequests += 1
+      retainedTrafficByIp.set(record.ip, traffic)
+      const kind = ATTACK_PATH.test(record.target)
+        ? "Exploit path"
+        : SCANNER_AGENT.test(record.userAgent)
+          ? "Scanner user agent"
+          : ["TRACE", "CONNECT"].includes(record.method)
+            ? "Unusual method"
+            : null
+      if (kind) retainedAttackTypes.set(kind, (retainedAttackTypes.get(kind) || 0) + 1)
       const recent = timestamp >= from
       if ((recordArchive || currentFile) && (attack || denied)) {
         const counts = {
@@ -289,6 +320,7 @@ function scanNginxLogs(config, now, lifetimeState) {
           const previous = liveLifetimeSources.get(record.ip) || {
             ip: record.ip,
             requests: 0,
+            retainedRequests: 0,
             attackSignals: 0,
             deniedRequests: 0,
             failedLogins: 0,
@@ -306,10 +338,17 @@ function scanNginxLogs(config, now, lifetimeState) {
         if (record.status >= 500 && record.status < 600) serverErrors += 1
       }
 
-      const hourIndex = recent ? Math.floor((timestamp - from) / (60 * 60 * 1000)) : -1
+      const hourIndex = recent
+        ? Math.floor(timestamp / 3_600_000) - Math.floor(currentHour / 3_600_000) + 23
+        : -1
       if (hourIndex >= 0 && hourIndex < hourly.length) {
         hourly[hourIndex].requests += 1
         if (attack) hourly[hourIndex].attackSignals += 1
+        if (denied) hourly[hourIndex].deniedRequests += 1
+        if (!attack && !denied) hourly[hourIndex].normalRequests += 1
+        if (record.status >= 500 && record.status < 600) hourly[hourIndex].serverErrors += 1
+        if (kind)
+          hourly[hourIndex].attackTypes[kind] = (hourly[hourIndex].attackTypes[kind] || 0) + 1
       }
 
       if (record.countryCode) {
@@ -319,7 +358,10 @@ function scanNginxLogs(config, now, lifetimeState) {
             code,
             name: countryName(code),
             requests: 0,
+            retainedRequests: 0,
+            retainedNormalRequests: 0,
             attackSignals: 0,
+            lifetimeAttackSignals: 0,
           }
           if (recent) {
             country.requests += 1
@@ -393,6 +435,9 @@ function scanNginxLogs(config, now, lifetimeState) {
     lifetimeSources,
     countries,
     hourly,
+    latestLogAt,
+    retainedTrafficByIp,
+    retainedAttackTypes: [...retainedAttackTypes].map(([type, count]) => ({ type, count })),
   }
 }
 
@@ -510,6 +555,14 @@ function scanSshJournal(config, now, lifetimeState) {
     ])
   )
   let failedLogins = 0
+  let successfulLogins = 0
+  let lastEventAt = null
+  const currentHour = Math.floor(now / 3_600_000) * 3_600_000
+  const hourly = Array.from({ length: 24 }, (_, index) => ({
+    hour: new Date(currentHour - (23 - index) * 3_600_000).toISOString(),
+    failedLogins: 0,
+    successfulLogins: 0,
+  }))
   let lastCursor = lifetimeState.sshCursor
   for (const line of available ? lifetimeJournal.stdout.split(/\r?\n/) : []) {
     if (!line) continue
@@ -543,15 +596,30 @@ function scanSshJournal(config, now, lifetimeState) {
     } catch {
       continue
     }
-    const failure = String(entry.MESSAGE || "").match(
+    const message = String(entry.MESSAGE || "")
+    const failure = message.match(
       /^Failed (?:password|publickey) for (?:invalid user )?\S+ from ([^\s]+)/i
     )
-    if (!failure) continue
     const timestamp = Number(entry.__REALTIME_TIMESTAMP) / 1000
+    if (!Number.isFinite(timestamp) || timestamp < from || timestamp > now + 5 * 60_000) continue
+    if (
+      (failure || /^Accepted (?:password|publickey) for \S+ from [^\s]+/i.test(message)) &&
+      (!lastEventAt || timestamp > Date.parse(lastEventAt))
+    )
+      lastEventAt = new Date(timestamp).toISOString()
+    const hourIndex = Math.floor(timestamp / 3_600_000) - Math.floor(currentHour / 3_600_000) + 23
+    const accepted = message.match(/^Accepted (?:password|publickey) for \S+ from ([^\s]+)/i)
+    if (failure) {
+      failedLogins += 1
+      if (hourIndex >= 0 && hourIndex < hourly.length) hourly[hourIndex].failedLogins += 1
+    }
+    if (accepted) {
+      successfulLogins += 1
+      if (hourIndex >= 0 && hourIndex < hourly.length) hourly[hourIndex].successfulLogins += 1
+    }
+    if (!failure) continue
     const ip = normalizeIp(failure[1])
-    if (!ip || !Number.isFinite(timestamp) || timestamp < from || timestamp > now + 5 * 60_000)
-      continue
-    failedLogins += 1
+    if (!ip) continue
     const source = sources.get(ip) || { ip, failedLogins: 0, lastSeen: null }
     source.failedLogins += 1
     if (!source.lastSeen || timestamp > Date.parse(source.lastSeen))
@@ -570,6 +638,9 @@ function scanSshJournal(config, now, lifetimeState) {
     available: true,
     lifetimeAvailable: available,
     failedLogins,
+    successfulLogins,
+    lastEventAt,
+    hourly,
     lifetimeFailedLogins,
     sources,
     lifetimeSources,
@@ -662,6 +733,7 @@ function collect(config, now) {
       blocked: true,
       lastSeen: null,
       scenario: String(decision.scenario || decision.type || "CrowdSec decision").slice(0, 100),
+      blockedAt: decision.created_at || decision.createdAt || decision.start_at || null,
     }
     blocks.set(ip, entry)
   }
@@ -714,6 +786,44 @@ function collect(config, now) {
   const topSources = new Map(nginx.sources)
   for (const [ip, block] of blocks) if (!topSources.has(ip)) topSources.set(ip, block)
   const countryMap = new Map(nginx.countries)
+  const retainedTraffic = [...nginx.retainedTrafficByIp.entries()].sort(
+    (a, b) => b[1].requests - a[1].requests
+  )
+  for (const [index, [ip, counts]] of retainedTraffic.entries()) {
+    const source = topSources.get(ip) || {
+      ip,
+      countryCode: counts.countryCode || null,
+      requests: 0,
+      attackSignals: 0,
+      lifetime: emptyCounts(),
+    }
+    if (!source.countryCode && counts.countryCode) source.countryCode = counts.countryCode
+    if (!source.countryCode && index < 2000) {
+      const code = lookupCountryCode(config, ip, now)
+      if (code) {
+        source.countryCode = code
+        source.country = countryName(code)
+        source.countrySource = "Local GeoIP database"
+      }
+    }
+    const code = String(source.countryCode || "")
+      .slice(0, 2)
+      .toUpperCase()
+    if (!/^[A-Z]{2}$/.test(code)) continue
+    const country = countryMap.get(code) || {
+      code,
+      name: countryName(code),
+      requests: 0,
+      attackSignals: 0,
+      lifetimeAttackSignals: 0,
+      attackSources: 0,
+      retainedRequests: 0,
+      retainedNormalRequests: 0,
+    }
+    country.retainedRequests = (country.retainedRequests || 0) + counts.requests
+    country.retainedNormalRequests = (country.retainedNormalRequests || 0) + counts.normalRequests
+    countryMap.set(code, country)
+  }
   for (const source of topSources.values()) {
     if (!source.countryCode) {
       const code = lookupCountryCode(config, source.ip, now)
@@ -737,6 +847,9 @@ function collect(config, now) {
       country.requests += source.requests
       country.attackSignals += source.attackSignals
     }
+    country.lifetimeAttackSignals =
+      (country.lifetimeAttackSignals || 0) + source.lifetime.attackSignals
+    country.attackSources = (country.attackSources || 0) + Number(source.lifetime.attackSignals > 0)
     countryMap.set(code, country)
   }
   for (const block of blocks.values()) {
@@ -767,7 +880,9 @@ function collect(config, now) {
   const bouncerActive = !config.testMode && serviceActive(config.crowdsecBouncerService)
   const countryRows = [...countryMap.values()].sort(
     (a, b) =>
-      b.attackSignals - a.attackSignals || b.requests - a.requests || a.code.localeCompare(b.code)
+      b.lifetimeAttackSignals - a.lifetimeAttackSignals ||
+      b.retainedNormalRequests - a.retainedNormalRequests ||
+      a.code.localeCompare(b.code)
   )
   const geoipAvailable =
     !config.testMode &&
@@ -808,6 +923,40 @@ function collect(config, now) {
     { attackSignals: 0, deniedRequests: 0, failedLogins: 0 }
   )
 
+  const hourlyHistory = lifetimeState.hourlyHistory || {}
+  for (const hour of nginx.hourly) {
+    const sshHour = ssh.hourly?.find((entry) => entry.hour === hour.hour)
+    const prior = hourlyHistory[hour.hour] || {}
+    hourlyHistory[hour.hour] = {
+      ...prior,
+      ...hour,
+      requests: nginx.available ? hour.requests : null,
+      normalRequests: nginx.available ? hour.normalRequests : null,
+      attackSignals: nginx.available ? hour.attackSignals : null,
+      deniedRequests: nginx.available ? hour.deniedRequests : null,
+      serverErrors: nginx.available ? hour.serverErrors : null,
+      failedLogins: ssh.available ? sshHour?.failedLogins || 0 : null,
+      successfulLogins: ssh.available ? sshHour?.successfulLogins || 0 : null,
+    }
+  }
+  const currentBucketKey = new Date(Math.floor(now / 3_600_000) * 3_600_000).toISOString()
+  hourlyHistory[currentBucketKey] = {
+    ...(hourlyHistory[currentBucketKey] || {}),
+    hour: currentBucketKey,
+    activeBlocks: blocks.size,
+  }
+  const historyCutoff = now - 7 * 24 * 60 * 60 * 1000
+  for (const [key, bucket] of Object.entries(hourlyHistory)) {
+    if (Date.parse(key) < historyCutoff) delete hourlyHistory[key]
+    else if (!bucket.hour) bucket.hour = key
+  }
+  lifetimeState.hourlyHistory = hourlyHistory
+  lifetimeState.dirty = true
+  writeLifetimeState(config, lifetimeState)
+  const historicalHourly = Object.values(hourlyHistory).sort(
+    (a, b) => Date.parse(a.hour) - Date.parse(b.hour)
+  )
+
   return {
     generatedAt: new Date(now).toISOString(),
     windowHours: 24,
@@ -817,6 +966,7 @@ function collect(config, now) {
       deniedRequests: nginx.deniedRequests,
       serverErrors: nginx.serverErrors,
       failedLogins: ssh.failedLogins,
+      successfulLogins: ssh.successfulLogins || 0,
       activeBlocks: blocks.size,
       uniqueAttackIps,
       lifetime: lifetimeSummary,
@@ -825,10 +975,12 @@ function collect(config, now) {
       nginx: {
         available: nginx.available,
         filesRead: nginx.filesRead,
+        lastEventAt: nginx.latestLogAt,
         acquisitionConfiguredInCrowdSec: nginxAcquisitionConfigured,
       },
       ssh: {
         available: ssh.available,
+        lastEventAt: ssh.lastEventAt || null,
         acquisitionConfiguredInCrowdSec: sshAcquisitionConfigured,
         permanentBanCount: permanentBanLists.ssh.size,
       },
@@ -857,7 +1009,9 @@ function collect(config, now) {
     },
     topSources: topSourceRows,
     countries: countryRows,
-    hourly: nginx.hourly,
+    hourly: historicalHourly,
+    history: { availableFrom: historicalHourly[0]?.hour || null, maxHours: 168 },
+    attackTypes: nginx.retainedAttackTypes,
   }
 }
 

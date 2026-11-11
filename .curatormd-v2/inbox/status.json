@@ -1,0 +1,13 @@
+{
+  "project_id": "vhost-manager-alpha",
+  "generated_at": "2026-11-11T23:17:01.718+07:00",
+  "source": "Curator V2 SQLite inbox summary",
+  "canonical": false,
+  "received_count": 0,
+  "failed_count": 0,
+  "quarantined_count": 0,
+  "oldest_pending_received_at": null,
+  "oldest_pending_age_seconds": null,
+  "claimed_count": 0,
+  "expired_claim_count": 0
+}
